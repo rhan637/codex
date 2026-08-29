@@ -2,6 +2,7 @@ use super::*;
 use crate::context::world_state::WorldStateSnapshot;
 use crate::context_manager::is_user_turn_boundary;
 use codex_history::ResponseItemEnvelope;
+use codex_protocol::protocol::AdaptiveContextBudgetCheckpoint;
 use codex_protocol::protocol::SessionContextWindow;
 use uuid::Uuid;
 
@@ -17,6 +18,8 @@ pub(super) struct RolloutReconstruction {
     pub(super) first_window_id: Option<Uuid>,
     pub(super) previous_window_id: Option<Uuid>,
     pub(super) window_id: Option<Uuid>,
+    pub(super) adaptive_context_budget: Option<AdaptiveContextBudgetCheckpoint>,
+    pub(super) adaptive_context_budget_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -54,6 +57,25 @@ struct ActiveReplaySegment<'a> {
     window: Option<ReconstructedWindow>,
 }
 
+#[derive(Debug, Default)]
+struct ReconstructedReplayMetadata<'a> {
+    world_state_replay: Vec<&'a RolloutItem>,
+    window: Option<ReconstructedWindow>,
+}
+
+#[derive(Debug)]
+pub(super) struct AdaptiveContextBudgetReconstruction {
+    pub(super) checkpoint: Option<AdaptiveContextBudgetCheckpoint>,
+    pub(super) error: Option<String>,
+}
+
+#[derive(Debug, Default)]
+struct AdaptiveContextBudgetReplaySegment<'a> {
+    turn_id: Option<String>,
+    counts_as_user_turn: bool,
+    checkpoints: Vec<&'a AdaptiveContextBudgetCheckpoint>,
+}
+
 fn turn_ids_are_compatible(active_turn_id: Option<&str>, item_turn_id: Option<&str>) -> bool {
     active_turn_id
         .is_none_or(|turn_id| item_turn_id.is_none_or(|item_turn_id| item_turn_id == turn_id))
@@ -64,8 +86,7 @@ fn finalize_active_segment<'a>(
     base_replacement_history: &mut Option<&'a [ResponseItemEnvelope]>,
     previous_turn_settings: &mut Option<PreviousTurnSettings>,
     reference_context_item: &mut TurnReferenceContextItem,
-    world_state_replay: &mut Vec<&'a RolloutItem>,
-    window: &mut Option<ReconstructedWindow>,
+    replay_metadata: &mut ReconstructedReplayMetadata<'a>,
     pending_rollback_turns: &mut usize,
 ) {
     // Thread rollback drops the newest surviving real user-message boundaries. In replay, that
@@ -78,8 +99,9 @@ fn finalize_active_segment<'a>(
         return;
     }
 
-    world_state_replay.extend(active_segment.world_state_replay);
-
+    replay_metadata
+        .world_state_replay
+        .extend(active_segment.world_state_replay);
     // A surviving replacement-history checkpoint is a complete history base. Once we
     // know the newest surviving one, older rollout items do not affect rebuilt history.
     if base_replacement_history.is_none()
@@ -88,8 +110,8 @@ fn finalize_active_segment<'a>(
         *base_replacement_history = Some(segment_base_replacement_history);
     }
 
-    if window.is_none() {
-        *window = active_segment.window;
+    if replay_metadata.window.is_none() {
+        replay_metadata.window = active_segment.window;
     }
 
     // `previous_turn_settings` come from the newest surviving user turn that established them.
@@ -108,6 +130,123 @@ fn finalize_active_segment<'a>(
     {
         *reference_context_item = active_segment.reference_context_item;
     }
+}
+
+fn finalize_adaptive_context_budget_segment<'a>(
+    segment: AdaptiveContextBudgetReplaySegment<'a>,
+    checkpoints: &mut Vec<&'a AdaptiveContextBudgetCheckpoint>,
+    pending_rollback_turns: &mut usize,
+) {
+    if *pending_rollback_turns > 0 {
+        if segment.counts_as_user_turn {
+            *pending_rollback_turns -= 1;
+        }
+        return;
+    }
+    checkpoints.extend(segment.checkpoints);
+}
+
+pub(super) fn reconstruct_adaptive_context_budget_from_rollout(
+    rollout_items: &[RolloutItem],
+) -> AdaptiveContextBudgetReconstruction {
+    let session_checkpoint = rollout_items.iter().find_map(|item| match item {
+        RolloutItem::SessionMeta(session_meta) => {
+            session_meta.meta.adaptive_context_budget.as_ref()
+        }
+        _ => None,
+    });
+    let mut checkpoints = Vec::new();
+    let mut pending_rollback_turns = 0usize;
+    let mut active_segment: Option<AdaptiveContextBudgetReplaySegment<'_>> = None;
+
+    for item in rollout_items.iter().rev() {
+        match item {
+            RolloutItem::Compacted(compacted) => {
+                if let Some(checkpoint) = compacted.adaptive_context_budget.as_ref() {
+                    active_segment
+                        .get_or_insert_with(AdaptiveContextBudgetReplaySegment::default)
+                        .checkpoints
+                        .push(checkpoint);
+                }
+            }
+            RolloutItem::EventMsg(EventMsg::ThreadRolledBack(rollback)) => {
+                pending_rollback_turns = pending_rollback_turns
+                    .saturating_add(usize::try_from(rollback.num_turns).unwrap_or(usize::MAX));
+            }
+            RolloutItem::EventMsg(EventMsg::TurnComplete(event)) => {
+                let segment =
+                    active_segment.get_or_insert_with(AdaptiveContextBudgetReplaySegment::default);
+                segment.turn_id.get_or_insert_with(|| event.turn_id.clone());
+            }
+            RolloutItem::EventMsg(EventMsg::TurnAborted(event)) => {
+                if let Some(turn_id) = &event.turn_id {
+                    active_segment
+                        .get_or_insert_with(AdaptiveContextBudgetReplaySegment::default)
+                        .turn_id
+                        .get_or_insert_with(|| turn_id.clone());
+                }
+            }
+            RolloutItem::EventMsg(EventMsg::UserMessage(_)) => {
+                active_segment
+                    .get_or_insert_with(AdaptiveContextBudgetReplaySegment::default)
+                    .counts_as_user_turn = true;
+            }
+            RolloutItem::TurnContext(context) => {
+                let segment =
+                    active_segment.get_or_insert_with(AdaptiveContextBudgetReplaySegment::default);
+                if segment.turn_id.is_none() {
+                    segment.turn_id = context.turn_id.clone();
+                }
+            }
+            RolloutItem::EventMsg(EventMsg::TurnStarted(event)) => {
+                if active_segment.as_ref().is_some_and(|segment| {
+                    turn_ids_are_compatible(segment.turn_id.as_deref(), Some(&event.turn_id))
+                }) && let Some(segment) = active_segment.take()
+                {
+                    finalize_adaptive_context_budget_segment(
+                        segment,
+                        &mut checkpoints,
+                        &mut pending_rollback_turns,
+                    );
+                }
+            }
+            RolloutItem::ResponseItem(response_item) => {
+                let segment =
+                    active_segment.get_or_insert_with(AdaptiveContextBudgetReplaySegment::default);
+                segment.counts_as_user_turn |= is_user_turn_boundary(&response_item.item);
+            }
+            RolloutItem::InterAgentCommunication(_) => {
+                active_segment
+                    .get_or_insert_with(AdaptiveContextBudgetReplaySegment::default)
+                    .counts_as_user_turn = true;
+            }
+            RolloutItem::EventMsg(_)
+            | RolloutItem::SessionMeta(_)
+            | RolloutItem::RealtimeItem(_)
+            | RolloutItem::WorldState(_)
+            | RolloutItem::SecurityRiskScore(_)
+            | RolloutItem::InterAgentCommunicationMetadata { .. } => {}
+        }
+    }
+    if let Some(segment) = active_segment {
+        finalize_adaptive_context_budget_segment(
+            segment,
+            &mut checkpoints,
+            &mut pending_rollback_turns,
+        );
+    }
+
+    let checkpoint = checkpoints.first().copied().or(session_checkpoint).cloned();
+    let expected_policy = session_checkpoint
+        .map(|checkpoint| &checkpoint.policy)
+        .or_else(|| checkpoints.last().map(|checkpoint| &checkpoint.policy));
+    let error = expected_policy.and_then(|expected_policy| {
+        checkpoints
+            .iter()
+            .find(|checkpoint| checkpoint.policy != *expected_policy)
+            .map(|_| "adaptive context budget policy drift detected in thread history".to_string())
+    });
+    AdaptiveContextBudgetReconstruction { checkpoint, error }
 }
 
 impl Session {
@@ -137,11 +276,12 @@ impl Session {
                 _ => None,
             })
         };
+        let adaptive_context_budget =
+            reconstruct_adaptive_context_budget_from_rollout(rollout_items);
         let mut base_replacement_history: Option<&[ResponseItemEnvelope]> = None;
         let mut previous_turn_settings = None;
         let mut reference_context_item = TurnReferenceContextItem::NeverSet;
-        let mut world_state_replay = Vec::new();
-        let mut window = None;
+        let mut replay_metadata = ReconstructedReplayMetadata::default();
         // Rollback is "drop the newest N user turns". While scanning in reverse, that becomes
         // "skip the next N user-turn segments we finalize".
         let mut pending_rollback_turns = 0usize;
@@ -263,8 +403,7 @@ impl Session {
                             &mut base_replacement_history,
                             &mut previous_turn_settings,
                             &mut reference_context_item,
-                            &mut world_state_replay,
-                            &mut window,
+                            &mut replay_metadata,
                             &mut pending_rollback_turns,
                         );
                     }
@@ -304,8 +443,7 @@ impl Session {
                 &mut base_replacement_history,
                 &mut previous_turn_settings,
                 &mut reference_context_item,
-                &mut world_state_replay,
-                &mut window,
+                &mut replay_metadata,
                 &mut pending_rollback_turns,
             );
         }
@@ -331,14 +469,14 @@ impl Session {
                 RolloutItem::ResponseItem(response_item) => {
                     history.record_annotated_items(
                         std::slice::from_ref(response_item),
-                        turn_context.model_info.truncation_policy.into(),
+                        turn_context.model_info().truncation_policy.into(),
                     );
                 }
                 RolloutItem::InterAgentCommunication(communication) => {
                     let response_item = communication.to_model_input_item();
                     history.record_items(
                         std::iter::once(&response_item),
-                        turn_context.model_info.truncation_policy.into(),
+                        turn_context.model_info().truncation_policy.into(),
                     );
                 }
                 RolloutItem::InterAgentCommunicationMetadata { .. } => {}
@@ -393,9 +531,9 @@ impl Session {
 
         // Segments and their contents were collected newest-first; replay the surviving records
         // chronologically so compaction resets and merge patches have their original meaning.
-        world_state_replay.reverse();
+        replay_metadata.world_state_replay.reverse();
         let mut world_state_baseline: Option<WorldStateSnapshot> = None;
-        for item in world_state_replay {
+        for item in replay_metadata.world_state_replay {
             match item {
                 RolloutItem::Compacted(_) => world_state_baseline = None,
                 RolloutItem::WorldState(world_state) if world_state.full => {
@@ -421,12 +559,15 @@ impl Session {
             }
         }
 
-        let window = window.or(initial_window).unwrap_or(ReconstructedWindow {
-            number: fallback_window_number,
-            first_id: None,
-            previous_id: None,
-            id: None,
-        });
+        let window = replay_metadata
+            .window
+            .or(initial_window)
+            .unwrap_or(ReconstructedWindow {
+                number: fallback_window_number,
+                first_id: None,
+                previous_id: None,
+                id: None,
+            });
         RolloutReconstruction {
             history: history.into_annotated_items(),
             previous_turn_settings,
@@ -436,6 +577,8 @@ impl Session {
             first_window_id: window.first_id,
             previous_window_id: window.previous_id,
             window_id: window.id,
+            adaptive_context_budget: adaptive_context_budget.checkpoint,
+            adaptive_context_budget_error: adaptive_context_budget.error,
         }
     }
 }

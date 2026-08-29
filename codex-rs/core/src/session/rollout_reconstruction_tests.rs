@@ -2,17 +2,24 @@ use super::*;
 
 use super::tests::build_world_state_from_turn_context;
 use super::tests::make_session_and_context;
+use super::tests::make_session_and_context_with_auth_and_config_and_rx;
 use super::tests::raw_history_items;
 use crate::context::CompactionSummary;
 use crate::context::ContextualUserFragment;
+use codex_features::Feature;
 use codex_history::CompactedItem;
 use codex_history::InitialHistory;
 use codex_history::ResponseItemEnvelope;
 use codex_history::ResumedHistory;
+use codex_login::CodexAuth;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::ADAPTIVE_CONTEXT_BUDGET_POLICY_VERSION;
+use codex_protocol::protocol::AdaptiveContextBudgetCheckpoint;
+use codex_protocol::protocol::AdaptiveContextBudgetPolicy;
+use codex_protocol::protocol::AdaptiveContextBudgetState;
 use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::SessionContextWindow;
 use codex_protocol::protocol::SessionMeta;
@@ -58,6 +65,39 @@ fn assistant_message(text: &str) -> ResponseItem {
 
 fn annotated(items: Vec<ResponseItem>) -> Vec<ResponseItemEnvelope> {
     items.into_iter().map(ResponseItemEnvelope::new).collect()
+}
+
+fn adaptive_checkpoint(
+    tiers: Vec<i64>,
+    target_context_budget_tokens: i64,
+) -> AdaptiveContextBudgetCheckpoint {
+    AdaptiveContextBudgetCheckpoint {
+        policy: AdaptiveContextBudgetPolicy {
+            policy_version: ADAPTIVE_CONTEXT_BUDGET_POLICY_VERSION,
+            context_window_tiers: tiers,
+            keep_below_percent: 40,
+            expand_at_or_above_percent: 60,
+            ambiguous_compactions_before_expand: 2,
+        },
+        state: AdaptiveContextBudgetState {
+            policy_version: ADAPTIVE_CONTEXT_BUDGET_POLICY_VERSION,
+            target_context_budget_tokens,
+            ambiguous_compaction_count: 0,
+        },
+    }
+}
+
+fn compacted_with_adaptive_checkpoint(checkpoint: AdaptiveContextBudgetCheckpoint) -> RolloutItem {
+    RolloutItem::Compacted(CompactedItem {
+        message: String::new(),
+        replacement_history: Some(Vec::new()),
+        mcp_resource_origins: None,
+        window_number: None,
+        first_window_id: None,
+        previous_window_id: None,
+        window_id: None,
+        adaptive_context_budget: Some(checkpoint),
+    })
 }
 
 fn inter_agent_assistant_message(text: &str) -> ResponseItem {
@@ -157,6 +197,8 @@ async fn record_initial_history_ignores_security_risk_scores() {
     let user_item = user_message("visible user input");
     let security_risk = SecurityRiskScore {
         scores: BTreeMap::from([("credential_access".to_string(), 0.92)]),
+        call_id: None,
+        action: None,
         sampled_at: None,
     };
 
@@ -241,12 +283,13 @@ async fn record_initial_history_resumed_bare_turn_context_does_not_hydrate_previ
         file_system_sandbox_policy: None,
         model: previous_model.to_string(),
         comp_hash: None,
-        personality: turn_context.personality,
+        personality: turn_context.personality(),
         collaboration_mode: Some(turn_context.collaboration_mode()),
         multi_agent_version: None,
         multi_agent_mode: None,
         realtime_active: Some(turn_context.realtime_active),
-        effort: turn_context.reasoning_effort.clone(),
+        cyber_access_program: None,
+        effort: turn_context.reasoning_effort().cloned(),
         summary: codex_protocol::config_types::ReasoningSummary::Auto,
     };
     let rollout_items = vec![RolloutItem::TurnContext(previous_context_item)];
@@ -289,12 +332,13 @@ async fn record_initial_history_resumed_hydrates_previous_turn_settings_from_lif
         file_system_sandbox_policy: None,
         model: previous_model.to_string(),
         comp_hash: Some("comp-hash-a".to_string()),
-        personality: turn_context.personality,
+        personality: turn_context.personality(),
         collaboration_mode: Some(turn_context.collaboration_mode()),
         multi_agent_version: None,
         multi_agent_mode: None,
         realtime_active: Some(turn_context.realtime_active),
-        effort: turn_context.reasoning_effort.clone(),
+        cyber_access_program: None,
+        effort: turn_context.reasoning_effort().cloned(),
         summary: codex_protocol::config_types::ReasoningSummary::Auto,
     };
     let turn_id = previous_context_item
@@ -464,7 +508,7 @@ async fn reconstruct_history_rollback_keeps_history_and_metadata_in_sync_for_com
     assert_eq!(
         reconstructed.previous_turn_settings,
         Some(PreviousTurnSettings {
-            model: turn_context.model_info.slug.clone(),
+            model: turn_context.model_info().slug.clone(),
             comp_hash: None,
             realtime_active: Some(turn_context.realtime_active),
         })
@@ -565,7 +609,7 @@ async fn reconstruct_history_rollback_keeps_history_and_metadata_in_sync_for_inc
     assert_eq!(
         reconstructed.previous_turn_settings,
         Some(PreviousTurnSettings {
-            model: turn_context.model_info.slug.clone(),
+            model: turn_context.model_info().slug.clone(),
             comp_hash: None,
             realtime_active: Some(turn_context.realtime_active),
         })
@@ -697,7 +741,7 @@ async fn reconstruct_history_rollback_skips_non_user_turns_for_history_and_metad
     assert_eq!(
         reconstructed.previous_turn_settings,
         Some(PreviousTurnSettings {
-            model: turn_context.model_info.slug.clone(),
+            model: turn_context.model_info().slug.clone(),
             comp_hash: None,
             realtime_active: Some(turn_context.realtime_active),
         })
@@ -802,7 +846,7 @@ async fn reconstruct_history_rollback_counts_inter_agent_assistant_turns() {
     assert_eq!(
         reconstructed.previous_turn_settings,
         Some(PreviousTurnSettings {
-            model: turn_context.model_info.slug.clone(),
+            model: turn_context.model_info().slug.clone(),
             comp_hash: None,
             realtime_active: Some(turn_context.realtime_active),
         })
@@ -1019,6 +1063,7 @@ async fn record_initial_history_resumed_rollback_drops_incomplete_user_turn_comp
             first_window_id: None,
             previous_window_id: None,
             window_id: None,
+            adaptive_context_budget: None,
         }),
         RolloutItem::EventMsg(EventMsg::ThreadRolledBack(
             codex_protocol::protocol::ThreadRolledBackEvent { num_turns: 1 },
@@ -1036,7 +1081,7 @@ async fn record_initial_history_resumed_rollback_drops_incomplete_user_turn_comp
     assert_eq!(
         session.previous_turn_settings().await,
         Some(PreviousTurnSettings {
-            model: turn_context.model_info.slug.clone(),
+            model: turn_context.model_info().slug.clone(),
             comp_hash: None,
             realtime_active: Some(turn_context.realtime_active),
         })
@@ -1046,6 +1091,85 @@ async fn record_initial_history_resumed_rollback_drops_incomplete_user_turn_comp
             .expect("serialize seeded reference context item"),
         serde_json::to_value(Some(previous_context_item))
             .expect("serialize expected reference context item")
+    );
+}
+
+#[tokio::test]
+async fn adaptive_checkpoint_reconstruction_is_rollback_aware_and_detects_policy_drift() {
+    let configured_policy = adaptive_checkpoint(vec![100, 200, 400], 100).policy;
+    let configured_policy_for_config = configured_policy.clone();
+    let (session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("test"),
+        Vec::new(),
+        move |config| {
+            config
+                .features
+                .enable(Feature::AdaptiveContextBudget)
+                .expect("adaptive context budget should be configurable");
+            config.adaptive_context_budget = Some(configured_policy_for_config);
+        },
+    )
+    .await;
+    let session_meta = RolloutItem::SessionMeta(SessionMetaLine {
+        meta: SessionMeta {
+            adaptive_context_budget: Some(adaptive_checkpoint(vec![100, 200, 400], 100)),
+            ..SessionMeta::default()
+        },
+        git: None,
+    });
+    let mut first_turn_context = turn_context.to_turn_context_item();
+    first_turn_context.turn_id = Some("first-turn".to_string());
+    let mut second_turn_context = turn_context.to_turn_context_item();
+    second_turn_context.turn_id = Some("second-turn".to_string());
+    let mut rollout_items = vec![session_meta];
+    rollout_items.extend(completed_user_turn_rollout(
+        first_turn_context,
+        vec![compacted_with_adaptive_checkpoint(adaptive_checkpoint(
+            vec![100, 200, 400],
+            200,
+        ))],
+    ));
+    rollout_items.extend(completed_user_turn_rollout(
+        second_turn_context,
+        vec![compacted_with_adaptive_checkpoint(adaptive_checkpoint(
+            vec![100, 200, 400],
+            400,
+        ))],
+    ));
+    rollout_items.push(RolloutItem::EventMsg(EventMsg::ThreadRolledBack(
+        codex_protocol::protocol::ThreadRolledBackEvent { num_turns: 1 },
+    )));
+
+    let reconstructed = session
+        .reconstruct_history_from_rollout(&turn_context, &rollout_items)
+        .await;
+    assert_eq!(
+        reconstructed.adaptive_context_budget,
+        Some(adaptive_checkpoint(vec![100, 200, 400], 200))
+    );
+    assert_eq!(reconstructed.adaptive_context_budget_error, None);
+
+    let mut drifted = adaptive_checkpoint(vec![100, 300, 400], 300);
+    drifted.policy.keep_below_percent = 30;
+    let mut drift_turn_context = turn_context.to_turn_context_item();
+    drift_turn_context.turn_id = Some("drift-turn".to_string());
+    let mut rollout_items = vec![RolloutItem::SessionMeta(SessionMetaLine {
+        meta: SessionMeta {
+            adaptive_context_budget: Some(adaptive_checkpoint(vec![100, 200, 400], 100)),
+            ..SessionMeta::default()
+        },
+        git: None,
+    })];
+    rollout_items.extend(completed_user_turn_rollout(
+        drift_turn_context,
+        vec![compacted_with_adaptive_checkpoint(drifted)],
+    ));
+    let reconstructed = session
+        .reconstruct_history_from_rollout(&turn_context, &rollout_items)
+        .await;
+    assert_eq!(
+        reconstructed.adaptive_context_budget_error,
+        Some("adaptive context budget policy drift detected in thread history".to_string())
     );
 }
 
@@ -1080,6 +1204,7 @@ async fn record_initial_history_resumed_does_not_seed_reference_context_item_aft
             first_window_id: None,
             previous_window_id: None,
             window_id: None,
+            adaptive_context_budget: None,
         }),
     ];
 
@@ -1150,6 +1275,7 @@ async fn reconstruct_history_prefers_compacted_window_over_session_meta() {
             first_window_id: Some(compacted_first_window_id.to_string()),
             previous_window_id: Some(compacted_previous_window_id.to_string()),
             window_id: Some(compacted_window_id.to_string()),
+            adaptive_context_budget: None,
         }),
     ];
 
@@ -1186,6 +1312,7 @@ async fn reconstruct_history_replays_world_state_from_latest_compaction_window()
                 first_window_id: None,
                 previous_window_id: None,
                 window_id: None,
+                adaptive_context_budget: None,
             }),
             RolloutItem::WorldState(WorldStateItem::full(object!({
                 "environment": {"status": "starting", "cwd": "/workspace"}
@@ -1234,6 +1361,7 @@ async fn reconstruct_history_preserves_legacy_compaction_count_with_session_meta
             first_window_id: None,
             previous_window_id: None,
             window_id: None,
+            adaptive_context_budget: None,
         }),
     ];
 
@@ -1262,6 +1390,7 @@ async fn reconstruct_history_legacy_compaction_without_replacement_history_does_
             first_window_id: None,
             previous_window_id: None,
             window_id: None,
+            adaptive_context_budget: None,
         }),
     ];
 
@@ -1298,6 +1427,7 @@ async fn reconstruct_history_legacy_compaction_without_replacement_history_clear
             first_window_id: None,
             previous_window_id: None,
             window_id: None,
+            adaptive_context_budget: None,
         }),
         RolloutItem::EventMsg(EventMsg::TurnStarted(
             codex_protocol::protocol::TurnStartedEvent {
@@ -1360,12 +1490,13 @@ async fn record_initial_history_resumed_turn_context_after_compaction_reestablis
         file_system_sandbox_policy: None,
         model: previous_model.to_string(),
         comp_hash: None,
-        personality: turn_context.personality,
+        personality: turn_context.personality(),
         collaboration_mode: Some(turn_context.collaboration_mode()),
         multi_agent_version: None,
         multi_agent_mode: None,
         realtime_active: Some(turn_context.realtime_active),
-        effort: turn_context.reasoning_effort.clone(),
+        cyber_access_program: None,
+        effort: turn_context.reasoning_effort().cloned(),
         summary: codex_protocol::config_types::ReasoningSummary::Auto,
     };
     let previous_turn_id = previous_context_item
@@ -1401,6 +1532,7 @@ async fn record_initial_history_resumed_turn_context_after_compaction_reestablis
             first_window_id: None,
             previous_window_id: None,
             window_id: None,
+            adaptive_context_budget: None,
         }),
         RolloutItem::TurnContext(previous_context_item),
         RolloutItem::EventMsg(EventMsg::TurnComplete(
@@ -1451,12 +1583,13 @@ async fn record_initial_history_resumed_turn_context_after_compaction_reestablis
             file_system_sandbox_policy: None,
             model: previous_model.to_string(),
             comp_hash: None,
-            personality: turn_context.personality,
+            personality: turn_context.personality(),
             collaboration_mode: Some(turn_context.collaboration_mode()),
             multi_agent_version: None,
             multi_agent_mode: None,
             realtime_active: Some(turn_context.realtime_active),
-            effort: turn_context.reasoning_effort.clone(),
+            cyber_access_program: None,
+            effort: turn_context.reasoning_effort().cloned(),
             summary: codex_protocol::config_types::ReasoningSummary::Auto,
         }))
         .expect("serialize expected reference context item")
@@ -1484,12 +1617,13 @@ async fn record_initial_history_resumed_aborted_turn_without_id_clears_active_tu
         file_system_sandbox_policy: None,
         model: previous_model.to_string(),
         comp_hash: None,
-        personality: turn_context.personality,
+        personality: turn_context.personality(),
         collaboration_mode: Some(turn_context.collaboration_mode()),
         multi_agent_version: None,
         multi_agent_mode: None,
         realtime_active: Some(turn_context.realtime_active),
-        effort: turn_context.reasoning_effort.clone(),
+        cyber_access_program: None,
+        effort: turn_context.reasoning_effort().cloned(),
         summary: codex_protocol::config_types::ReasoningSummary::Auto,
     };
     let previous_turn_id = previous_context_item
@@ -1566,6 +1700,7 @@ async fn record_initial_history_resumed_aborted_turn_without_id_clears_active_tu
             first_window_id: None,
             previous_window_id: None,
             window_id: None,
+            adaptive_context_budget: None,
         }),
     ];
 
@@ -1616,12 +1751,13 @@ async fn record_initial_history_resumed_unmatched_abort_preserves_active_turn_fo
         file_system_sandbox_policy: None,
         model: current_model.to_string(),
         comp_hash: None,
-        personality: turn_context.personality,
+        personality: turn_context.personality(),
         collaboration_mode: Some(turn_context.collaboration_mode()),
         multi_agent_version: None,
         multi_agent_mode: None,
         realtime_active: Some(turn_context.realtime_active),
-        effort: turn_context.reasoning_effort.clone(),
+        cyber_access_program: None,
+        effort: turn_context.reasoning_effort().cloned(),
         summary: codex_protocol::config_types::ReasoningSummary::Auto,
     };
 
@@ -1744,12 +1880,13 @@ async fn record_initial_history_resumed_trailing_incomplete_turn_compaction_clea
         file_system_sandbox_policy: None,
         model: previous_model.to_string(),
         comp_hash: None,
-        personality: turn_context.personality,
+        personality: turn_context.personality(),
         collaboration_mode: Some(turn_context.collaboration_mode()),
         multi_agent_version: None,
         multi_agent_mode: None,
         realtime_active: Some(turn_context.realtime_active),
-        effort: turn_context.reasoning_effort.clone(),
+        cyber_access_program: None,
+        effort: turn_context.reasoning_effort().cloned(),
         summary: codex_protocol::config_types::ReasoningSummary::Auto,
     };
     let previous_turn_id = previous_context_item
@@ -1817,6 +1954,7 @@ async fn record_initial_history_resumed_trailing_incomplete_turn_compaction_clea
             first_window_id: None,
             previous_window_id: None,
             window_id: None,
+            adaptive_context_budget: None,
         }),
     ];
 
@@ -1882,7 +2020,7 @@ async fn record_initial_history_resumed_trailing_incomplete_turn_preserves_turn_
     assert_eq!(
         session.previous_turn_settings().await,
         Some(PreviousTurnSettings {
-            model: turn_context.model_info.slug.clone(),
+            model: turn_context.model_info().slug.clone(),
             comp_hash: None,
             realtime_active: Some(turn_context.realtime_active),
         })
@@ -1916,12 +2054,13 @@ async fn record_initial_history_resumed_replaced_incomplete_compacted_turn_clear
         file_system_sandbox_policy: None,
         model: previous_model.to_string(),
         comp_hash: None,
-        personality: turn_context.personality,
+        personality: turn_context.personality(),
         collaboration_mode: Some(turn_context.collaboration_mode()),
         multi_agent_version: None,
         multi_agent_mode: None,
         realtime_active: Some(turn_context.realtime_active),
-        effort: turn_context.reasoning_effort.clone(),
+        cyber_access_program: None,
+        effort: turn_context.reasoning_effort().cloned(),
         summary: codex_protocol::config_types::ReasoningSummary::Auto,
     };
     let previous_turn_id = previous_context_item
@@ -1990,6 +2129,7 @@ async fn record_initial_history_resumed_replaced_incomplete_compacted_turn_clear
             first_window_id: None,
             previous_window_id: None,
             window_id: None,
+            adaptive_context_budget: None,
         }),
         // A newer TurnStarted replaces the incomplete compacted turn without a matching
         // completion/abort for the old one.

@@ -339,7 +339,11 @@ impl StatusHistoryCell {
         let forked_from = forked_from.map(|id| id.to_string());
         let default_usage = TokenUsage::default();
         let (context_usage, context_window) = match token_info {
-            Some(info) => (&info.last_token_usage, info.model_context_window),
+            Some(info) => (
+                &info.last_token_usage,
+                info.target_context_budget_tokens
+                    .or(info.model_context_window),
+            ),
             None => (&default_usage, config.model_context_window),
         };
         let context_window = context_window.map(|window| StatusContextWindowData {

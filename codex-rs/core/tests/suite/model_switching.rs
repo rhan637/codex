@@ -100,7 +100,7 @@ async fn submit_model_turn(
     Ok(())
 }
 
-fn test_model_info(
+pub(super) fn test_model_info(
     slug: &str,
     display_name: &str,
     description: &str,
@@ -128,6 +128,7 @@ fn test_model_info(
         model_specialty: None,
         tool_mode: None,
         multi_agent_version: None,
+        multi_agent_reasoning_effort: None,
         priority: 1,
         additional_speed_tiers: Vec::new(),
         service_tiers: Vec::new(),
@@ -1364,6 +1365,7 @@ async fn model_switch_to_smaller_model_updates_token_context_window() -> Result<
         model_specialty: None,
         tool_mode: None,
         multi_agent_version: None,
+        multi_agent_reasoning_effort: None,
         priority: 1,
         additional_speed_tiers: Vec::new(),
         service_tiers: Vec::new(),

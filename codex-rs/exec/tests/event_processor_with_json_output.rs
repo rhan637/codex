@@ -1256,6 +1256,7 @@ fn token_usage_update_is_emitted_on_turn_completion() {
                         reasoning_output_tokens: 7,
                     },
                     model_context_window: Some(128_000),
+                    target_context_budget_tokens: None,
                 },
             },
         ));
@@ -1561,6 +1562,7 @@ fn failed_turn_clears_stale_final_message() {
                 items: Vec::new(),
                 status: TurnStatus::Failed,
                 error: Some(TurnError {
+                    misalignment: None,
                     message: "turn failed".to_string(),
                     additional_details: None,
                     codex_error_info: None,
@@ -1617,6 +1619,7 @@ fn turn_failure_prefers_structured_error_message() {
 
     let error = processor.collect_thread_events(ServerNotification::Error(ErrorNotification {
         error: TurnError {
+            misalignment: None,
             message: "backend failed".to_string(),
             codex_error_info: None,
             additional_details: Some("request id abc".to_string()),

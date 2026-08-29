@@ -8,8 +8,10 @@ use chrono::DateTime;
 use chrono::NaiveDateTime;
 use chrono::Timelike;
 use chrono::Utc;
+use codex_protocol::SanitizedGitUrl;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::GitInfo;
+use codex_protocol::protocol::HistoryPosition;
 use codex_protocol::protocol::SessionMeta;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
@@ -25,6 +27,86 @@ use std::path::PathBuf;
 use tempfile::tempdir;
 use uuid::Uuid;
 
+#[test]
+fn fork_cutoff_distinguishes_logical_parent_from_reverted_rollout() {
+    let parent_id = ThreadId::new();
+    let thread_id = ThreadId::new();
+    let physical_id = ThreadId::new();
+    let replacement_id = ThreadId::new();
+    let original_path = PathBuf::from(format!("rollout-2026-01-27T12-34-56-{thread_id}.jsonl"));
+    let reverted_path = PathBuf::from(format!(
+        "rollout-2026-01-27T12-34-56-{thread_id}_{replacement_id}.jsonl"
+    ));
+
+    for (name, parent, cutoff, base_id, path, expected) in [
+        (
+            "persisted revert",
+            Some(parent_id),
+            Some(20),
+            thread_id,
+            Some(reverted_path.as_path()),
+            Some(20),
+        ),
+        (
+            "legacy direct fork",
+            Some(parent_id),
+            None,
+            parent_id,
+            None,
+            Some(40),
+        ),
+        (
+            "legacy fork of reverted parent",
+            Some(parent_id),
+            None,
+            physical_id,
+            Some(original_path.as_path()),
+            Some(40),
+        ),
+        (
+            "legacy child revert",
+            Some(parent_id),
+            None,
+            thread_id,
+            Some(reverted_path.as_path()),
+            None,
+        ),
+        (
+            "legacy repeated revert",
+            Some(parent_id),
+            None,
+            physical_id,
+            Some(reverted_path.as_path()),
+            None,
+        ),
+        (
+            "missing parent",
+            None,
+            Some(20),
+            parent_id,
+            Some(original_path.as_path()),
+            None,
+        ),
+    ] {
+        let meta = SessionMeta {
+            id: thread_id,
+            forked_from_id: parent,
+            forked_from_ordinal_exclusive: cutoff,
+            history_base: Some(HistoryPosition {
+                thread_id: base_id,
+                end_ordinal_exclusive: 40,
+                end_byte_offset: 100,
+            }),
+            ..SessionMeta::default()
+        };
+        assert_eq!(
+            forked_from_ordinal_exclusive(&meta, path),
+            expected,
+            "{name}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn extract_metadata_from_rollout_uses_session_meta() {
     let dir = tempdir().expect("tempdir");
@@ -38,6 +120,7 @@ async fn extract_metadata_from_rollout_uses_session_meta() {
         session_id: id.into(),
         id,
         forked_from_id: None,
+        forked_from_ordinal_exclusive: None,
         parent_thread_id: None,
         timestamp: "2026-01-27T12:34:56Z".to_string(),
         cwd: dir.path().to_path_buf(),
@@ -58,6 +141,7 @@ async fn extract_metadata_from_rollout_uses_session_meta() {
         subagent_history_start_ordinal: None,
         multi_agent_version: None,
         context_window: None,
+        adaptive_context_budget: None,
     };
     let session_meta_line = SessionMetaLine {
         meta: session_meta,
@@ -136,6 +220,7 @@ async fn extract_metadata_from_rollout_returns_latest_memory_mode() {
         session_id: id.into(),
         id,
         forked_from_id: None,
+        forked_from_ordinal_exclusive: None,
         parent_thread_id: None,
         timestamp: "2026-01-27T12:34:56Z".to_string(),
         cwd: dir.path().to_path_buf(),
@@ -156,6 +241,7 @@ async fn extract_metadata_from_rollout_returns_latest_memory_mode() {
         subagent_history_start_ordinal: None,
         multi_agent_version: None,
         context_window: None,
+        adaptive_context_budget: None,
     };
     let polluted_meta = SessionMeta {
         memory_mode: Some("polluted".to_string()),
@@ -212,6 +298,7 @@ fn builder_from_items_falls_back_to_filename() {
         first_window_id: None,
         previous_window_id: None,
         window_id: None,
+        adaptive_context_budget: None,
     })];
 
     let builder = builder_from_items(items.as_slice(), path.as_path()).expect("builder");
@@ -315,7 +402,10 @@ async fn backfill_sessions_preserves_existing_git_branch_and_fills_missing_git_f
         Some(GitInfo {
             commit_hash: Some(codex_git_utils::GitSha::new("rollout-sha")),
             branch: Some("rollout-branch".to_string()),
-            repository_url: Some("git@example.com:openai/codex.git".to_string()),
+            repository_url: Some(
+                SanitizedGitUrl::try_from("git@example.com:openai/codex.git")
+                    .expect("valid git remote URL"),
+            ),
         }),
     );
 
@@ -473,6 +563,7 @@ fn write_rollout_in_sessions_with_cwd(
         session_id: id.into(),
         id,
         forked_from_id: None,
+        forked_from_ordinal_exclusive: None,
         parent_thread_id: None,
         timestamp: event_ts.to_string(),
         cwd,
@@ -493,6 +584,7 @@ fn write_rollout_in_sessions_with_cwd(
         subagent_history_start_ordinal: None,
         multi_agent_version: None,
         context_window: None,
+        adaptive_context_budget: None,
     };
     let session_meta_line = SessionMetaLine {
         meta: session_meta,

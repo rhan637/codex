@@ -5,6 +5,7 @@ use chrono::DateTime;
 use chrono::Utc;
 use codex_app_server_protocol::CodexErrorInfo;
 use codex_app_server_protocol::ThreadTimelineEntry;
+use codex_protocol::SanitizedGitUrl;
 use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
@@ -12,6 +13,7 @@ use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ReasoningEffort;
+use codex_protocol::protocol::AdaptiveContextBudgetCheckpoint;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::GitInfo;
 use codex_protocol::protocol::HistoryPosition;
@@ -103,6 +105,9 @@ pub struct CreateThreadParams {
     pub subagent_history_start_ordinal: Option<u64>,
     /// Initial context-window identity captured when the thread was created.
     pub initial_window_id: String,
+    /// Initial adaptive-context checkpoint captured when the thread was created.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adaptive_context_budget: Option<AdaptiveContextBudgetCheckpoint>,
     /// Metadata captured for the newly created thread.
     pub metadata: ThreadPersistenceMetadata,
 }
@@ -663,7 +668,7 @@ pub struct GitInfoPatch {
         skip_serializing_if = "Option::is_none",
         with = "optional_option"
     )]
-    pub origin_url: ClearableField<String>,
+    pub origin_url: ClearableField<SanitizedGitUrl>,
 }
 
 impl GitInfoPatch {

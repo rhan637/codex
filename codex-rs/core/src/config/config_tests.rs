@@ -229,6 +229,25 @@ async fn load_config_normalizes_relative_cwd_override() -> std::io::Result<()> {
 }
 
 #[tokio::test]
+async fn load_config_applies_optional_mcp_startup_grace() -> std::io::Result<()> {
+    let codex_home = tempdir()?;
+    let config_toml: ConfigToml = toml::from_str("mcp_optional_startup_grace_ms = 2500")
+        .expect("optional MCP startup grace should parse from config.toml");
+    let config = Config::load_from_base_config_with_overrides(
+        config_toml,
+        ConfigOverrides::default(),
+        codex_home.abs(),
+    )
+    .await?;
+
+    assert_eq!(
+        config.mcp_optional_startup_grace,
+        Duration::from_millis(2500)
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_toml_parsing() {
     let history_with_persistence = r#"
 [history]
@@ -684,6 +703,77 @@ auto_compact_fallback_buffer_tokens = 8000
         assert_eq!(config.token_budget, Some(expected));
     }
     Ok(())
+}
+
+#[tokio::test]
+async fn load_config_resolves_adaptive_context_budget_policy() -> std::io::Result<()> {
+    for (config_toml, expected) in [
+        (
+            "[features]\nadaptive_context_budget = true\n",
+            AdaptiveContextBudgetPolicy {
+                policy_version: ADAPTIVE_CONTEXT_BUDGET_POLICY_VERSION,
+                context_window_tiers: vec![272_000, 487_000, 872_000],
+                keep_below_percent: 45,
+                expand_at_or_above_percent: 65,
+                ambiguous_compactions_before_expand: 2,
+            },
+        ),
+        (
+            r#"
+[features.adaptive_context_budget]
+enabled = true
+context_window_tiers = [100000, 200000]
+keep_below_percent = 30
+expand_at_or_above_percent = 70
+ambiguous_compactions_before_expand = 3
+"#,
+            AdaptiveContextBudgetPolicy {
+                policy_version: ADAPTIVE_CONTEXT_BUDGET_POLICY_VERSION,
+                context_window_tiers: vec![100_000, 200_000],
+                keep_below_percent: 30,
+                expand_at_or_above_percent: 70,
+                ambiguous_compactions_before_expand: 3,
+            },
+        ),
+    ] {
+        let codex_home = tempdir()?;
+        let config_toml = toml::from_str(config_toml).expect("TOML should deserialize");
+        let config = Config::load_from_base_config_with_overrides(
+            config_toml,
+            ConfigOverrides::default(),
+            codex_home.abs(),
+        )
+        .await?;
+
+        assert!(config.features.enabled(Feature::AdaptiveContextBudget));
+        assert_eq!(config.adaptive_context_budget, Some(expected));
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn load_config_rejects_invalid_or_conflicting_adaptive_context_budget() {
+    for config_toml in [
+        "[features.adaptive_context_budget]\nenabled = true\ncontext_window_tiers = []\n",
+        "[features.adaptive_context_budget]\nenabled = true\ncontext_window_tiers = [100, 100]\n",
+        "[features.adaptive_context_budget]\nenabled = true\nkeep_below_percent = 60\nexpand_at_or_above_percent = 60\n",
+        "[features.adaptive_context_budget]\nenabled = true\nambiguous_compactions_before_expand = 0\n",
+        "[features]\nadaptive_context_budget = true\ntoken_budget = true\n",
+        "model_auto_compact_token_limit = 100\n[features]\nadaptive_context_budget = true\n",
+        "model_auto_compact_token_limit_scope = \"body_after_prefix\"\n[features]\nadaptive_context_budget = true\n",
+    ] {
+        let codex_home = tempdir().expect("tempdir");
+        let config_toml = toml::from_str(config_toml).expect("TOML should deserialize");
+        let error = Config::load_from_base_config_with_overrides(
+            config_toml,
+            ConfigOverrides::default(),
+            codex_home.abs(),
+        )
+        .await
+        .expect_err("invalid adaptive context budget should fail");
+
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+    }
 }
 
 #[tokio::test]
@@ -5533,7 +5623,8 @@ async fn rebuild_preserving_session_layers_refreshes_plugin_derived_mcp_config()
             .plugin_attributions_by_server_name(),
         HashMap::from([(
             "sample".to_string(),
-            McpPluginAttribution::new("sample@test".to_string(), "sample".to_string()),
+            McpPluginAttribution::new("sample@test".to_string(), "sample".to_string())
+                .with_host_root(PathUri::from_host_native_path(&plugin_root)?),
         )])
     );
 
@@ -7830,6 +7921,7 @@ async fn replace_mcp_servers_streamable_http_serializes_oauth_resource() -> anyh
             scopes: None,
             oauth: Some(McpServerOAuthConfig {
                 client_id: Some("eci-prd-pub-codex-123".to_string()),
+                callback_url: None,
                 callback_port: None,
             }),
             oauth_resource: Some("https://resource.example.com".to_string()),

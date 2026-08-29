@@ -613,6 +613,7 @@ fn turn_context(root: &Path, turn_id: &str) -> RolloutItem {
         multi_agent_version: None,
         multi_agent_mode: None,
         realtime_active: None,
+        cyber_access_program: None,
         effort: None,
         summary: ReasoningSummary::Auto,
     })
@@ -628,5 +629,6 @@ fn compacted(message: &str, replacement_history: Option<Vec<ResponseItem>>) -> R
         first_window_id: None,
         previous_window_id: None,
         window_id: None,
+        adaptive_context_budget: None,
     })
 }

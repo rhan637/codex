@@ -1,0 +1,6 @@
+---
+source: tui/src/status/tests.rs
+assertion_line: 2262
+expression: context_line
+---
+│  Context window:   95% left (40K used / 572K)                               │

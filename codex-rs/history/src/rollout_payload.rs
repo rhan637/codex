@@ -13,6 +13,7 @@ use super::SecurityRiskScore;
 use super::SessionMetaLine;
 use super::TurnContextItem;
 use super::WorldStateItem;
+use codex_protocol::protocol::AdaptiveContextBudgetCheckpoint;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
@@ -150,6 +151,8 @@ pub(super) struct CompactedItemWire<'a> {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(with = "Option<String>")]
     window_id: Option<WindowIdWire<'a>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    adaptive_context_budget: Option<Cow<'a, AdaptiveContextBudgetCheckpoint>>,
 }
 
 impl<'a> From<&'a CompactedItem> for CompactedItemWire<'a> {
@@ -185,6 +188,7 @@ impl<'a> From<&'a CompactedItem> for CompactedItemWire<'a> {
                 .window_id
                 .as_deref()
                 .map(|window_id| WindowIdWire::Id(Cow::Borrowed(window_id))),
+            adaptive_context_budget: item.adaptive_context_budget.as_ref().map(Cow::Borrowed),
         }
     }
 }
@@ -246,6 +250,7 @@ impl TryFrom<CompactedItemWire<'_>> for CompactedItem {
             first_window_id: item.first_window_id.map(Cow::into_owned),
             previous_window_id: item.previous_window_id.map(Cow::into_owned),
             window_id,
+            adaptive_context_budget: item.adaptive_context_budget.map(Cow::into_owned),
         })
     }
 }

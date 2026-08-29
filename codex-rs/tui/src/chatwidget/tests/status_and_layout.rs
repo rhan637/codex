@@ -161,6 +161,7 @@ async fn context_indicator_shows_used_tokens_when_window_unknown() {
         total_token_usage: token_usage.clone(),
         last_token_usage: token_usage,
         model_context_window: None,
+        target_context_budget_tokens: None,
     };
 
     handle_token_count(&mut chat, Some(token_info));
@@ -217,6 +218,23 @@ async fn token_usage_update_uses_runtime_context_window() {
         !context_line.contains("1M"),
         "expected /status to avoid raw config context window, got: {context_line}"
     );
+}
+
+#[tokio::test]
+async fn token_usage_update_prefers_adaptive_context_budget() {
+    let (mut chat, _rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+    let mut token_info = make_token_info(
+        /*total_tokens*/ 50_000, /*context_window*/ 100_000,
+    );
+    token_info.target_context_budget_tokens = Some(200_000);
+
+    handle_token_count(&mut chat, Some(token_info));
+
+    assert_eq!(
+        chat.status_line_value_for_item(crate::bottom_pane::StatusLineItem::ContextWindowSize),
+        Some("200K window".to_string())
+    );
+    assert_eq!(chat.bottom_pane.context_window_percent(), Some(80));
 }
 
 #[tokio::test]
@@ -2640,6 +2658,7 @@ async fn status_widget_and_approval_modal_snapshot() {
 
     // Now show an approval modal (e.g. exec approval).
     let ev = ExecApprovalRequestEvent {
+        kind: Default::default(),
         call_id: "call-approve-exec".into(),
         approval_id: Some("call-approve-exec".into()),
         turn_id: "turn-approve-exec".into(),

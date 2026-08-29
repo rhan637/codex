@@ -363,6 +363,7 @@ pub(super) fn make_token_info(total_tokens: i64, context_window: i64) -> TokenUs
         total_token_usage: usage(total_tokens),
         last_token_usage: usage(total_tokens),
         model_context_window: Some(context_window),
+        target_context_budget_tokens: None,
     }
 }
 
@@ -397,6 +398,7 @@ pub(super) fn handle_token_count(chat: &mut ChatWidget, info: Option<TokenUsageI
                             total: token_usage_breakdown(info.total_token_usage),
                             last: token_usage_breakdown(info.last_token_usage),
                             model_context_window: info.model_context_window,
+                            target_context_budget_tokens: info.target_context_budget_tokens,
                         },
                     },
                 ),
@@ -415,6 +417,7 @@ pub(super) fn handle_error(
     chat.handle_server_notification(
         ServerNotification::Error(ErrorNotification {
             error: AppServerTurnError {
+                misalignment: None,
                 message: message.into(),
                 codex_error_info,
                 additional_details: None,
@@ -448,6 +451,7 @@ pub(super) fn handle_stream_error_with_replay(
     chat.handle_server_notification(
         ServerNotification::Error(ErrorNotification {
             error: AppServerTurnError {
+                misalignment: None,
                 message: message.into(),
                 codex_error_info: None,
                 additional_details,
@@ -715,6 +719,7 @@ pub(super) fn handle_image_generation_end(
                 transparent_background: None,
                 failure: None,
                 saved_path,
+                imagegen_request_id: None,
             }),
         }),
         /*replay_kind*/ None,

@@ -62,6 +62,7 @@ use crate::state_db;
 use crate::state_db::StateDbHandle;
 use codex_git_utils::collect_git_info;
 use codex_git_utils::get_git_repo_root;
+use codex_protocol::protocol::AdaptiveContextBudgetCheckpoint;
 use codex_protocol::protocol::GitInfo as ProtocolGitInfo;
 use codex_protocol::protocol::HistoryPosition;
 use codex_protocol::protocol::MultiAgentVersion;
@@ -103,6 +104,7 @@ pub enum RolloutRecorderParams {
         /// thread ID stable while creating a new immutable rollout file.
         rollout_id_override: Option<RolloutId>,
         forked_from_id: Option<ThreadId>,
+        forked_from_ordinal_exclusive: Option<u64>,
         parent_thread_id: Option<ThreadId>,
         source: Box<SessionSource>,
         thread_source: Option<ThreadSource>,
@@ -115,6 +117,7 @@ pub enum RolloutRecorderParams {
         history_base: Option<HistoryPosition>,
         subagent_history_start_ordinal: Option<u64>,
         initial_window_id: Option<String>,
+        adaptive_context_budget: Option<AdaptiveContextBudgetCheckpoint>,
     },
     Resume {
         path: PathBuf,
@@ -199,6 +202,7 @@ impl RolloutRecorderParams {
             conversation_id,
             rollout_id_override: None,
             forked_from_id,
+            forked_from_ordinal_exclusive: None,
             parent_thread_id,
             source: Box::new(source),
             thread_source,
@@ -211,6 +215,7 @@ impl RolloutRecorderParams {
             history_base: None,
             subagent_history_start_ordinal: None,
             initial_window_id: None,
+            adaptive_context_budget: None,
         }
     }
 
@@ -283,6 +288,18 @@ impl RolloutRecorderParams {
         self
     }
 
+    /// Set the logical fork boundary independently of the physical history base.
+    pub fn with_forked_from_ordinal_exclusive(mut self, cutoff: Option<u64>) -> Self {
+        if let Self::Create {
+            forked_from_ordinal_exclusive,
+            ..
+        } = &mut self
+        {
+            *forked_from_ordinal_exclusive = cutoff;
+        }
+        self
+    }
+
     pub fn with_subagent_history_start_ordinal(
         mut self,
         subagent_history_start_ordinal: Option<u64>,
@@ -304,6 +321,20 @@ impl RolloutRecorderParams {
         } = &mut self
         {
             *window_id = Some(initial_window_id);
+        }
+        self
+    }
+
+    pub fn with_adaptive_context_budget(
+        mut self,
+        adaptive_context_budget: Option<AdaptiveContextBudgetCheckpoint>,
+    ) -> Self {
+        if let Self::Create {
+            adaptive_context_budget: checkpoint,
+            ..
+        } = &mut self
+        {
+            *checkpoint = adaptive_context_budget;
         }
         self
     }
@@ -830,6 +861,7 @@ impl RolloutRecorder {
                 conversation_id,
                 rollout_id_override,
                 forked_from_id,
+                forked_from_ordinal_exclusive,
                 parent_thread_id,
                 source,
                 thread_source,
@@ -842,6 +874,7 @@ impl RolloutRecorder {
                 history_base,
                 subagent_history_start_ordinal,
                 initial_window_id,
+                adaptive_context_budget,
             } => {
                 let ordinal_state =
                     RolloutOrdinalState::for_new_rollout(history_mode, history_base);
@@ -860,6 +893,8 @@ impl RolloutRecorder {
                     session_id,
                     id: conversation_id,
                     forked_from_id,
+                    forked_from_ordinal_exclusive: forked_from_ordinal_exclusive
+                        .filter(|_| forked_from_id.is_some()),
                     parent_thread_id,
                     timestamp,
                     cwd: cwd.clone(),
@@ -884,6 +919,7 @@ impl RolloutRecorder {
                     subagent_history_start_ordinal,
                     multi_agent_version,
                     context_window: initial_window_id.map(SessionContextWindow::new),
+                    adaptive_context_budget,
                 };
 
                 RolloutWriterState {

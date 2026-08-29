@@ -596,6 +596,7 @@ async fn paginated_realtime_items_materialize_separately_in_rollout_order() {
             history_base: None,
             subagent_history_start_ordinal: None,
             initial_window_id: "window-1".to_string(),
+            adaptive_context_budget: None,
             metadata: ThreadPersistenceMetadata {
                 cwd: Some(home.path().to_path_buf()),
                 model_provider: "test-provider".to_string(),
@@ -2526,6 +2527,7 @@ async fn create_paginated_subagent_thread(
             history_base,
             subagent_history_start_ordinal,
             initial_window_id: "window-1".to_string(),
+            adaptive_context_budget: None,
             metadata: ThreadPersistenceMetadata {
                 cwd: Some(std::env::current_dir().expect("cwd")),
                 model_provider: "test-provider".to_string(),

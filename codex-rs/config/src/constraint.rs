@@ -19,6 +19,9 @@ pub enum ConstraintError {
     #[error("To use model `{model}`, you need to use auto review.")]
     AutoReviewRequired { model: String },
 
+    #[error("{message}")]
+    AdaptiveContextBudget { message: String },
+
     #[error("field `{field_name}` cannot be empty")]
     EmptyField { field_name: String },
 

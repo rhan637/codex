@@ -126,6 +126,12 @@ pub struct GuardianV2ReviewScopeConfigToml {
 pub struct GuardianV2ConfigToml {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub enabled: Option<bool>,
+    /// Route Guardian review and classification through the unmetered Codex endpoints.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub free_guardian: Option<bool>,
+    /// Persist reviewed actions and risk scores to rollout files for debugging.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub persist_scores: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub classifier_instructions: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -324,6 +330,27 @@ impl FeatureConfig for TokenBudgetConfigToml {
     }
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AdaptiveContextBudgetConfigToml {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_window_tiers: Option<Vec<i64>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub keep_below_percent: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expand_at_or_above_percent: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ambiguous_compactions_before_expand: Option<u32>,
+}
+
+impl FeatureConfig for AdaptiveContextBudgetConfigToml {
+    fn enabled(&self) -> Option<bool> {
+        self.enabled
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RolloutBudgetConfigToml {
@@ -385,6 +412,32 @@ pub struct CurrentTimeReminderConfigToml {
 }
 
 impl FeatureConfig for CurrentTimeReminderConfigToml {
+    fn enabled(&self) -> Option<bool> {
+        self.enabled
+    }
+}
+
+/// How the sleep tool is selected when its feature gate is enabled.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SleepToolMode {
+    /// Preserve the existing model and legacy clock configuration defaults.
+    #[default]
+    ModelDriven,
+    /// Register sleep regardless of the model or legacy clock configuration.
+    AlwaysOn,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SleepToolConfigToml {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mode: Option<SleepToolMode>,
+}
+
+impl FeatureConfig for SleepToolConfigToml {
     fn enabled(&self) -> Option<bool> {
         self.enabled
     }
