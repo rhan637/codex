@@ -6303,6 +6303,7 @@ fn token_usage_notification(
                 reasoning_output_tokens: 0,
             },
             model_context_window,
+            target_context_budget_tokens: None,
         },
     })
 }

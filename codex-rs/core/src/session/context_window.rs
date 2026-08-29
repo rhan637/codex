@@ -30,6 +30,7 @@ pub(crate) async fn context_window_token_status(
         sess,
         turn_context.config.as_ref(),
         turn_context.model_info().as_ref(),
+        sess.adaptive_context_budget_target().await,
     )
     .await
 }
@@ -46,13 +47,20 @@ pub(crate) async fn context_window_token_status_for_model(
         turn_context.use_model_token_budget_defaults,
         model_info,
     );
-    context_window_token_status_with_config(sess, &config, model_info).await
+    context_window_token_status_with_config(
+        sess,
+        &config,
+        model_info,
+        sess.adaptive_context_budget_target().await,
+    )
+    .await
 }
 
 async fn context_window_token_status_with_config(
     sess: &Session,
     config: &Config,
     model_info: &ModelInfo,
+    adaptive_context_budget_target: Option<i64>,
 ) -> ContextWindowTokenStatus {
     let active_context_tokens = sess.get_total_token_usage().await;
 
@@ -61,7 +69,15 @@ async fn context_window_token_status_with_config(
         match config.model_auto_compact_token_limit_scope {
             AutoCompactTokenLimitScope::Total => (
                 active_context_tokens,
-                model_info.auto_compact_token_limit(),
+                adaptive_context_budget_target.map_or_else(
+                    || model_info.auto_compact_token_limit(),
+                    |target| {
+                        Some(crate::adaptive_context_budget::effective_compact_limit(
+                            target,
+                            crate::adaptive_context_budget::catalog_auto_compact_limit(model_info),
+                        ))
+                    },
+                ),
                 None,
             ),
             AutoCompactTokenLimitScope::BodyAfterPrefix => {
@@ -80,9 +96,13 @@ async fn context_window_token_status_with_config(
         };
 
     // The model's full context window is a hard cap, independent of the auto-compaction scope.
-    let full_context_window_limit = model_info.resolved_context_window().map(|context_window| {
-        context_window.saturating_mul(model_info.effective_context_window_percent) / 100
-    });
+    let full_context_window_limit = if adaptive_context_budget_target.is_some() {
+        crate::adaptive_context_budget::usable_runtime_context_window(config, model_info)
+    } else {
+        model_info.resolved_context_window().map(|context_window| {
+            context_window.saturating_mul(model_info.effective_context_window_percent) / 100
+        })
+    };
 
     // Report remaining tokens against the base (unbuffered) window, capped by the full context.
     let base_window_tokens_remaining = [

@@ -348,10 +348,11 @@ async fn run_remote_compact_task_inner_impl(
             message: String::new(),
             window_number: new_window_number,
             window_ids: new_window_ids,
+            compaction: Some(compaction_metadata),
         },
+        compaction_turn_context,
     )
     .await;
-    sess.recompute_token_usage(compaction_turn_context).await;
 
     sess.emit_turn_item_completed(compaction_turn_context, compaction_item)
         .await;

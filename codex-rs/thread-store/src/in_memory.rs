@@ -144,6 +144,7 @@ mod tests {
                     history_base: None,
                     subagent_history_start_ordinal: None,
                     initial_window_id: uuid::Uuid::now_v7().to_string(),
+                    adaptive_context_budget: None,
                     metadata: ThreadPersistenceMetadata {
                         cwd: None,
                         model_provider: "test-provider".to_string(),
@@ -437,6 +438,7 @@ mod tests {
             history_base: None,
             subagent_history_start_ordinal: None,
             initial_window_id: uuid::Uuid::now_v7().to_string(),
+            adaptive_context_budget: None,
             metadata: thread_metadata(),
         }
     }
@@ -566,6 +568,7 @@ impl InMemoryThreadStore {
             subagent_history_start_ordinal: params.subagent_history_start_ordinal,
             multi_agent_version: params.multi_agent_version,
             context_window: Some(SessionContextWindow::new(params.initial_window_id.clone())),
+            adaptive_context_budget: params.adaptive_context_budget.clone(),
             ..SessionMeta::default()
         };
         state

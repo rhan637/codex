@@ -3987,6 +3987,7 @@ mod tests {
                 codex_rollout_budget_units: None,
             },
             model_context_window: Some(4096),
+            target_context_budget_tokens: Some(2048),
         };
         let rate_limits = RateLimitSnapshot {
             limit_id: Some("codex".to_string()),
@@ -4029,6 +4030,7 @@ mod tests {
                 assert_eq!(usage.total.cached_input_tokens, 25);
                 assert_eq!(usage.last.output_tokens, 7);
                 assert_eq!(usage.model_context_window, Some(4096));
+                assert_eq!(usage.target_context_budget_tokens, Some(2048));
             }
             other => bail!("unexpected notification: {other:?}"),
         }

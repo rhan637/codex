@@ -141,6 +141,7 @@ async fn extract_metadata_from_rollout_uses_session_meta() {
         subagent_history_start_ordinal: None,
         multi_agent_version: None,
         context_window: None,
+        adaptive_context_budget: None,
     };
     let session_meta_line = SessionMetaLine {
         meta: session_meta,
@@ -240,6 +241,7 @@ async fn extract_metadata_from_rollout_returns_latest_memory_mode() {
         subagent_history_start_ordinal: None,
         multi_agent_version: None,
         context_window: None,
+        adaptive_context_budget: None,
     };
     let polluted_meta = SessionMeta {
         memory_mode: Some("polluted".to_string()),
@@ -296,6 +298,7 @@ fn builder_from_items_falls_back_to_filename() {
         first_window_id: None,
         previous_window_id: None,
         window_id: None,
+        adaptive_context_budget: None,
     })];
 
     let builder = builder_from_items(items.as_slice(), path.as_path()).expect("builder");
@@ -581,6 +584,7 @@ fn write_rollout_in_sessions_with_cwd(
         subagent_history_start_ordinal: None,
         multi_agent_version: None,
         context_window: None,
+        adaptive_context_budget: None,
     };
     let session_meta_line = SessionMetaLine {
         meta: session_meta,

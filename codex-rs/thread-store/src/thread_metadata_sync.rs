@@ -453,6 +453,7 @@ mod tests {
             history_base: None,
             subagent_history_start_ordinal: None,
             initial_window_id: uuid::Uuid::now_v7().to_string(),
+            adaptive_context_budget: None,
             metadata: ThreadPersistenceMetadata {
                 cwd: None,
                 model_provider: "test-provider".to_string(),
@@ -587,6 +588,7 @@ mod tests {
             first_window_id: None,
             previous_window_id: None,
             window_id: None,
+            adaptive_context_budget: None,
         });
 
         let first = sync

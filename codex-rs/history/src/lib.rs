@@ -152,6 +152,7 @@ pub struct CompactedItem {
     pub first_window_id: Option<String>,
     pub previous_window_id: Option<String>,
     pub window_id: Option<String>,
+    pub adaptive_context_budget: Option<codex_protocol::protocol::AdaptiveContextBudgetCheckpoint>,
 }
 
 impl Serialize for CompactedItem {

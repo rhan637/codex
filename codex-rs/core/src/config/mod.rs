@@ -61,6 +61,7 @@ use codex_core_plugins::PluginsConfigInput;
 use codex_exec_server::ExecutorFileSystem;
 use codex_exec_server::LOCAL_FS;
 use codex_exec_server::ReadFileOptions;
+use codex_features::AdaptiveContextBudgetConfigToml;
 use codex_features::CodeModeConfigToml;
 use codex_features::CurrentTimeReminderConfigToml;
 use codex_features::CurrentTimeReminderDeliveryMode;
@@ -121,6 +122,8 @@ use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::permissions::ReadDenyMatcher;
+use codex_protocol::protocol::ADAPTIVE_CONTEXT_BUDGET_POLICY_VERSION;
+use codex_protocol::protocol::AdaptiveContextBudgetPolicy;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::SandboxPolicy;
@@ -1042,6 +1045,8 @@ pub struct Config {
 
     /// Context-window token budget configuration, when enabled.
     pub token_budget: Option<TokenBudgetConfig>,
+    /// Thread policy for adaptive automatic-compaction soft budgets, when enabled.
+    pub adaptive_context_budget: Option<AdaptiveContextBudgetPolicy>,
     /// Shared token budget for the root thread and its sub-agents.
     pub rollout_budget: Option<RolloutBudgetConfig>,
     /// Current-time reminder and clock tool configuration, when enabled.
@@ -2794,6 +2799,93 @@ fn resolve_token_budget_config(
     Ok(Some(token_budget))
 }
 
+const DEFAULT_ADAPTIVE_CONTEXT_BUDGET_TIERS: [i64; 3] = [272_000, 487_000, 872_000];
+const DEFAULT_ADAPTIVE_CONTEXT_BUDGET_KEEP_PERCENT: u32 = 45;
+const DEFAULT_ADAPTIVE_CONTEXT_BUDGET_EXPAND_PERCENT: u32 = 65;
+const DEFAULT_ADAPTIVE_CONTEXT_BUDGET_AMBIGUOUS_COMPACTIONS: u32 = 2;
+
+fn resolve_adaptive_context_budget_config(
+    config_toml: &ConfigToml,
+    features: &ManagedFeatures,
+) -> std::io::Result<Option<AdaptiveContextBudgetPolicy>> {
+    if !features.enabled(Feature::AdaptiveContextBudget) {
+        return Ok(None);
+    }
+    if features.enabled(Feature::TokenBudget) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "features.adaptive_context_budget conflicts with features.token_budget",
+        ));
+    }
+    if matches!(
+        config_toml.model_auto_compact_token_limit_scope,
+        Some(AutoCompactTokenLimitScope::BodyAfterPrefix)
+    ) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "features.adaptive_context_budget requires model_auto_compact_token_limit_scope = \"total\"",
+        ));
+    }
+    if config_toml.model_auto_compact_token_limit.is_some() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "features.adaptive_context_budget conflicts with model_auto_compact_token_limit",
+        ));
+    }
+
+    let config = adaptive_context_budget_toml_config(config_toml.features.as_ref());
+    let policy = AdaptiveContextBudgetPolicy {
+        policy_version: ADAPTIVE_CONTEXT_BUDGET_POLICY_VERSION,
+        context_window_tiers: config
+            .and_then(|config| config.context_window_tiers.clone())
+            .unwrap_or_else(|| DEFAULT_ADAPTIVE_CONTEXT_BUDGET_TIERS.to_vec()),
+        keep_below_percent: config
+            .and_then(|config| config.keep_below_percent)
+            .unwrap_or(DEFAULT_ADAPTIVE_CONTEXT_BUDGET_KEEP_PERCENT),
+        expand_at_or_above_percent: config
+            .and_then(|config| config.expand_at_or_above_percent)
+            .unwrap_or(DEFAULT_ADAPTIVE_CONTEXT_BUDGET_EXPAND_PERCENT),
+        ambiguous_compactions_before_expand: config
+            .and_then(|config| config.ambiguous_compactions_before_expand)
+            .unwrap_or(DEFAULT_ADAPTIVE_CONTEXT_BUDGET_AMBIGUOUS_COMPACTIONS),
+    };
+    validate_adaptive_context_budget_policy(&policy)?;
+    Ok(Some(policy))
+}
+
+fn validate_adaptive_context_budget_policy(
+    policy: &AdaptiveContextBudgetPolicy,
+) -> std::io::Result<()> {
+    if policy.context_window_tiers.is_empty()
+        || policy.context_window_tiers.iter().any(|tier| *tier <= 0)
+        || policy
+            .context_window_tiers
+            .windows(2)
+            .any(|tiers| tiers[0] >= tiers[1])
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "features.adaptive_context_budget.context_window_tiers must contain positive, strictly increasing values",
+        ));
+    }
+    if policy.keep_below_percent == 0
+        || policy.keep_below_percent >= policy.expand_at_or_above_percent
+        || policy.expand_at_or_above_percent > 100
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "features.adaptive_context_budget requires 0 < keep_below_percent < expand_at_or_above_percent <= 100",
+        ));
+    }
+    if policy.ambiguous_compactions_before_expand == 0 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "features.adaptive_context_budget.ambiguous_compactions_before_expand must be at least 1",
+        ));
+    }
+    Ok(())
+}
+
 fn resolve_rollout_budget_config(
     config_toml: &ConfigToml,
     features: &ManagedFeatures,
@@ -2921,6 +3013,15 @@ fn multi_agent_v2_toml_config(features: Option<&FeaturesToml>) -> Option<&MultiA
 
 fn token_budget_toml_config(features: Option<&FeaturesToml>) -> Option<&TokenBudgetConfigToml> {
     match features?.token_budget.as_ref()? {
+        FeatureToml::Enabled(_) => None,
+        FeatureToml::Config(config) => Some(config),
+    }
+}
+
+fn adaptive_context_budget_toml_config(
+    features: Option<&FeaturesToml>,
+) -> Option<&AdaptiveContextBudgetConfigToml> {
+    match features?.adaptive_context_budget.as_ref()? {
         FeatureToml::Enabled(_) => None,
         FeatureToml::Config(config) => Some(config),
     }
@@ -3685,6 +3786,8 @@ impl Config {
         let code_mode = resolve_code_mode_config(&cfg);
         let multi_agent_v2 = resolve_multi_agent_v2_config(&cfg);
         let token_budget = resolve_token_budget_config(&cfg, &features)?;
+        let adaptive_context_budget =
+            resolve_adaptive_context_budget_config(&cfg, &features)?;
         let rollout_budget = resolve_rollout_budget_config(&cfg, &features)?;
         let current_time_reminder = resolve_current_time_reminder_config(&cfg, &features)?;
         let sleep_tool_mode = cfg
@@ -4292,6 +4395,7 @@ impl Config {
             ghost_snapshot,
             multi_agent_v2,
             token_budget,
+            adaptive_context_budget,
             rollout_budget,
             current_time_reminder,
             sleep_tool_mode,

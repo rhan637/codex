@@ -167,6 +167,7 @@ fn token_info_for(model_slug: &str, config: &Config, usage: &TokenUsage) -> Toke
         total_token_usage: usage.clone(),
         last_token_usage: usage.clone(),
         model_context_window: context_window,
+        target_context_budget_tokens: None,
     }
 }
 
@@ -2182,6 +2183,7 @@ async fn status_context_window_uses_last_usage() {
         total_token_usage: total_usage.clone(),
         last_token_usage: last_usage,
         model_context_window: config.model_context_window,
+        target_context_budget_tokens: None,
     };
     let composite = new_status_output(
         &config,
@@ -2212,4 +2214,50 @@ async fn status_context_window_uses_last_usage() {
         !context_line.contains("102K"),
         "context line should not use total aggregated tokens, got: {context_line}"
     );
+}
+
+#[tokio::test]
+async fn status_context_window_snapshot_uses_adaptive_budget() {
+    let temp_home = TempDir::new().expect("temp home");
+    let mut config = test_config(&temp_home).await;
+    config.model_context_window = Some(272_000);
+    let usage = TokenUsage {
+        input_tokens: 35_000,
+        cached_input_tokens: 0,
+        output_tokens: 5_000,
+        reasoning_output_tokens: 0,
+        total_tokens: 40_000,
+    };
+    let token_info = TokenUsageInfo {
+        total_token_usage: usage.clone(),
+        last_token_usage: usage.clone(),
+        model_context_window: config.model_context_window,
+        target_context_budget_tokens: Some(572_000),
+    };
+    let now = chrono::Local
+        .with_ymd_and_hms(2024, 6, 1, 12, 0, 0)
+        .single()
+        .expect("timestamp");
+    let model_slug = get_model_offline_for_tests(config.model.as_deref());
+    let composite = new_status_output(
+        &config,
+        test_status_account_display().as_ref(),
+        Some(&token_info),
+        &usage,
+        &None,
+        /*thread_name*/ None,
+        /*forked_from*/ None,
+        /*rate_limits*/ None,
+        None,
+        now,
+        &model_slug,
+        /*collaboration_mode*/ None,
+        /*reasoning_effort_override*/ None,
+    );
+    let context_line = render_lines(&composite.display_lines(/*width*/ 80))
+        .into_iter()
+        .find(|line| line.contains("Context window"))
+        .expect("context line");
+
+    assert_snapshot!("status_context_window_uses_adaptive_budget", context_line);
 }

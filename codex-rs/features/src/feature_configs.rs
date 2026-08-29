@@ -330,6 +330,27 @@ impl FeatureConfig for TokenBudgetConfigToml {
     }
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AdaptiveContextBudgetConfigToml {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_window_tiers: Option<Vec<i64>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub keep_below_percent: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expand_at_or_above_percent: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ambiguous_compactions_before_expand: Option<u32>,
+}
+
+impl FeatureConfig for AdaptiveContextBudgetConfigToml {
+    fn enabled(&self) -> Option<bool> {
+        self.enabled
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RolloutBudgetConfigToml {

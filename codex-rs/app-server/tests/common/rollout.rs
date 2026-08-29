@@ -135,6 +135,7 @@ pub fn create_fake_rollout_with_token_usage(
                 codex_rollout_budget_units: None,
             },
             model_context_window: Some(200_000),
+            target_context_budget_tokens: None,
         }),
         rate_limits: None,
     }))?;
@@ -277,6 +278,7 @@ fn create_fake_rollout_with_source_and_parent_thread_id(
         subagent_history_start_ordinal: None,
         multi_agent_version: None,
         context_window: None,
+        adaptive_context_budget: None,
     };
     let payload = serde_json::to_value(SessionMetaLine {
         meta,
@@ -370,6 +372,7 @@ pub fn create_fake_rollout_with_text_elements(
         subagent_history_start_ordinal: None,
         multi_agent_version: None,
         context_window: None,
+        adaptive_context_budget: None,
     };
     let payload = serde_json::to_value(SessionMetaLine {
         meta,

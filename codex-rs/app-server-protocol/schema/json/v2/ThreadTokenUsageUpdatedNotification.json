@@ -13,6 +13,13 @@
             "null"
           ]
         },
+        "targetContextBudgetTokens": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "total": {
           "$ref": "#/definitions/TokenUsageBreakdown"
         }

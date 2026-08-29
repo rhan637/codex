@@ -132,6 +132,14 @@ pub(crate) struct SessionConfiguration {
 }
 
 impl SessionConfiguration {
+    pub(crate) fn adaptive_context_budget_policy(
+        &self,
+    ) -> Option<codex_protocol::protocol::AdaptiveContextBudgetPolicy> {
+        self.original_config_do_not_use
+            .adaptive_context_budget
+            .clone()
+    }
+
     pub(super) fn cwd(&self) -> &AbsolutePathBuf {
         &self.legacy_fallback_cwd
     }
@@ -765,6 +773,44 @@ impl Session {
             }
         });
         let initial_auto_compact_window_ids = AutoCompactWindowIds::new_initial();
+        let configured_adaptive_context_budget = config
+            .adaptive_context_budget
+            .clone()
+            .map(crate::adaptive_context_budget::AdaptiveContextBudgetRuntime::initial);
+        let inherited_adaptive_context_budget = match &initial_history {
+            InitialHistory::Forked(items) => Some(
+                super::rollout_reconstruction::reconstruct_adaptive_context_budget_from_rollout(
+                    items,
+                ),
+            ),
+            InitialHistory::New | InitialHistory::Cleared | InitialHistory::Resumed(_) => None,
+        };
+        let initial_adaptive_context_budget = if config.adaptive_context_budget.is_some() {
+            inherited_adaptive_context_budget
+                .and_then(|reconstruction| {
+                    reconstruction.checkpoint.map(|checkpoint| {
+                        crate::adaptive_context_budget::AdaptiveContextBudgetRuntime::restored(
+                            checkpoint,
+                            reconstruction.error,
+                        )
+                    })
+                })
+                .or(configured_adaptive_context_budget)
+        } else {
+            None
+        };
+        if matches!(
+            initial_history,
+            InitialHistory::New | InitialHistory::Cleared
+        ) && let Some(runtime) = &initial_adaptive_context_budget
+        {
+            runtime
+                .ensure_model_compatible(config.as_ref(), &model_info)
+                .map_err(anyhow::Error::msg)?;
+        }
+        let initial_adaptive_context_budget_checkpoint = initial_adaptive_context_budget
+            .as_ref()
+            .map(crate::adaptive_context_budget::AdaptiveContextBudgetRuntime::checkpoint);
         let restore_child_window = matches!(&initial_history, InitialHistory::Forked(_))
             && session_configuration.session_source.is_non_root_agent()
             && config.features.enabled(Feature::TokenBudget);
@@ -844,6 +890,8 @@ impl Session {
                             initial_window_id: initial_auto_compact_window_ids
                                 .window_id
                                 .to_string(),
+                            adaptive_context_budget: initial_adaptive_context_budget_checkpoint
+                                .clone(),
                             metadata: ThreadPersistenceMetadata {
                                 cwd: Some(config.cwd.to_path_buf()),
                                 model_provider: config.model_provider_id.clone(),
@@ -1214,6 +1262,7 @@ impl Session {
                 session_configuration.clone(),
                 initial_auto_compact_window_ids,
             );
+            state.set_adaptive_context_budget(initial_adaptive_context_budget);
             state.base_instructions_provenance = base_instructions_provenance.clone();
             let managed_network_requirements_configured = config
                 .config_layer_stack

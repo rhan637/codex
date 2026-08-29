@@ -86,6 +86,7 @@ pub(crate) struct CompactedHistoryMetadata {
     pub(crate) message: String,
     pub(crate) window_number: u64,
     pub(crate) window_ids: AutoCompactWindowIds,
+    pub(crate) compaction: Option<CompactionTurnMetadata>,
 }
 
 pub(crate) async fn build_compaction_initial_context(
@@ -384,10 +385,11 @@ async fn run_compact_task_inner_impl(
             message: summary_text,
             window_number,
             window_ids,
+            compaction: Some(compaction_metadata),
         },
+        &turn_context,
     )
     .await;
-    sess.recompute_token_usage(&turn_context).await;
 
     sess.emit_turn_item_completed(&turn_context, compaction_item)
         .await;

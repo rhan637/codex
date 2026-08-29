@@ -932,6 +932,7 @@ fn token_usage_info_from_app_server(token_usage: ThreadTokenUsage) -> TokenUsage
             reasoning_output_tokens: token_usage.last.reasoning_output_tokens,
         },
         model_context_window: token_usage.model_context_window,
+        target_context_budget_tokens: token_usage.target_context_budget_tokens,
     }
 }
 
@@ -1163,10 +1164,12 @@ impl ChatWidget {
     }
 
     fn context_remaining_percent(&self, info: &TokenUsageInfo) -> Option<i64> {
-        info.model_context_window.map(|window| {
-            info.last_token_usage
-                .percent_of_context_window_remaining(window)
-        })
+        info.target_context_budget_tokens
+            .or(info.model_context_window)
+            .map(|window| {
+                info.last_token_usage
+                    .percent_of_context_window_remaining(window)
+            })
     }
 
     fn context_used_tokens(&self, info: &TokenUsageInfo, percent_known: bool) -> Option<i64> {

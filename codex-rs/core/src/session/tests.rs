@@ -2211,6 +2211,7 @@ async fn reconstruct_history_uses_replacement_history_verbatim() {
         first_window_id: Some(first_window_id.to_string()),
         previous_window_id: Some(previous_window_id.to_string()),
         window_id: Some(window_id.to_string()),
+        adaptive_context_budget: None,
     })];
 
     let reconstructed = session
@@ -2807,6 +2808,7 @@ async fn record_initial_history_seeds_token_info_from_rollout() {
             codex_rollout_budget_units: None,
         },
         model_context_window: Some(1_000),
+        target_context_budget_tokens: None,
     };
     let info2 = TokenUsageInfo {
         total_token_usage: TokenUsage {
@@ -2828,6 +2830,7 @@ async fn record_initial_history_seeds_token_info_from_rollout() {
             codex_rollout_budget_units: None,
         },
         model_context_window: Some(2_000),
+        target_context_budget_tokens: None,
     };
 
     rollout_items.push(RolloutItem::EventMsg(EventMsg::TokenCount(
@@ -2918,6 +2921,7 @@ async fn recompute_token_usage_updates_model_context_window() {
             total_token_usage: TokenUsage::default(),
             last_token_usage: TokenUsage::default(),
             model_context_window: Some(258_400),
+            target_context_budget_tokens: None,
         }));
     }
 
@@ -3030,6 +3034,7 @@ async fn record_token_usage_info_notifies_extension_contributors() {
                 total_token_usage: first_usage.clone(),
                 last_token_usage: first_usage,
                 model_context_window: turn_context.model_context_window(),
+                target_context_budget_tokens: None,
             },
             saw_session_store: true,
             saw_thread_store: true,
@@ -3042,6 +3047,7 @@ async fn record_token_usage_info_notifies_extension_contributors() {
                 total_token_usage: expected_total_usage,
                 last_token_usage: second_usage,
                 model_context_window: turn_context.model_context_window(),
+                target_context_budget_tokens: None,
             },
             saw_session_store: true,
             saw_thread_store: true,
@@ -4085,6 +4091,7 @@ async fn thread_rollback_restores_cleared_reference_context_item_after_compactio
             first_window_id: Some(first_window_id.to_string()),
             previous_window_id: Some(previous_window_id.to_string()),
             window_id: Some(compacted_window_id.to_string()),
+            adaptive_context_budget: None,
         }),
         RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {
             turn_id: compact_turn_id,
@@ -4851,6 +4858,7 @@ async fn open_thread_persistence(session: &mut Session) -> PathBuf {
             subagent_history_start_ordinal: None,
             history_base: None,
             initial_window_id: Uuid::now_v7().to_string(),
+            adaptive_context_budget: None,
             metadata: ThreadPersistenceMetadata {
                 cwd: Some(config.cwd.to_path_buf()),
                 model_provider: config.model_provider_id.clone(),
@@ -7947,6 +7955,7 @@ async fn shutdown_complete_does_not_append_to_thread_store_after_shutdown() {
             subagent_history_start_ordinal: None,
             history_base: None,
             initial_window_id: Uuid::now_v7().to_string(),
+            adaptive_context_budget: None,
             metadata: ThreadPersistenceMetadata {
                 cwd: Some(config.cwd.to_path_buf()),
                 model_provider: config.model_provider_id.clone(),
@@ -8058,6 +8067,7 @@ async fn submission_loop_channel_close_runs_full_thread_teardown() {
             subagent_history_start_ordinal: None,
             history_base: None,
             initial_window_id: Uuid::now_v7().to_string(),
+            adaptive_context_budget: None,
             metadata: ThreadPersistenceMetadata {
                 cwd: Some(config.cwd.to_path_buf()),
                 model_provider: config.model_provider_id.clone(),
@@ -10609,6 +10619,7 @@ async fn attach_in_memory_thread_store(
             subagent_history_start_ordinal: None,
             history_base: None,
             initial_window_id: Uuid::now_v7().to_string(),
+            adaptive_context_budget: None,
             metadata: ThreadPersistenceMetadata {
                 cwd: Some(config.cwd.to_path_buf()),
                 model_provider: config.model_provider_id.clone(),
@@ -11284,6 +11295,7 @@ async fn set_total_token_usage(sess: &Session, total_token_usage: TokenUsage) {
         total_token_usage,
         last_token_usage: TokenUsage::default(),
         model_context_window: None,
+        target_context_budget_tokens: None,
     }));
 }
 
@@ -11737,6 +11749,7 @@ async fn sample_rollout(
         first_window_id: Some(window_ids.first_window_id.to_string()),
         previous_window_id: window_ids.previous_window_id.map(|id| id.to_string()),
         window_id: Some(window_ids.window_id.to_string()),
+        adaptive_context_budget: None,
     }));
 
     let user2 = user_message("second user");
@@ -11767,6 +11780,7 @@ async fn sample_rollout(
         first_window_id: Some(window_ids.first_window_id.to_string()),
         previous_window_id: window_ids.previous_window_id.map(|id| id.to_string()),
         window_id: Some(window_ids.window_id.to_string()),
+        adaptive_context_budget: None,
     }));
 
     let user3 = user_message("third user");

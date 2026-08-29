@@ -62,6 +62,7 @@ use crate::state_db;
 use crate::state_db::StateDbHandle;
 use codex_git_utils::collect_git_info;
 use codex_git_utils::get_git_repo_root;
+use codex_protocol::protocol::AdaptiveContextBudgetCheckpoint;
 use codex_protocol::protocol::GitInfo as ProtocolGitInfo;
 use codex_protocol::protocol::HistoryPosition;
 use codex_protocol::protocol::MultiAgentVersion;
@@ -116,6 +117,7 @@ pub enum RolloutRecorderParams {
         history_base: Option<HistoryPosition>,
         subagent_history_start_ordinal: Option<u64>,
         initial_window_id: Option<String>,
+        adaptive_context_budget: Option<AdaptiveContextBudgetCheckpoint>,
     },
     Resume {
         path: PathBuf,
@@ -213,6 +215,7 @@ impl RolloutRecorderParams {
             history_base: None,
             subagent_history_start_ordinal: None,
             initial_window_id: None,
+            adaptive_context_budget: None,
         }
     }
 
@@ -318,6 +321,20 @@ impl RolloutRecorderParams {
         } = &mut self
         {
             *window_id = Some(initial_window_id);
+        }
+        self
+    }
+
+    pub fn with_adaptive_context_budget(
+        mut self,
+        adaptive_context_budget: Option<AdaptiveContextBudgetCheckpoint>,
+    ) -> Self {
+        if let Self::Create {
+            adaptive_context_budget: checkpoint,
+            ..
+        } = &mut self
+        {
+            *checkpoint = adaptive_context_budget;
         }
         self
     }
@@ -857,6 +874,7 @@ impl RolloutRecorder {
                 history_base,
                 subagent_history_start_ordinal,
                 initial_window_id,
+                adaptive_context_budget,
             } => {
                 let ordinal_state =
                     RolloutOrdinalState::for_new_rollout(history_mode, history_base);
@@ -901,6 +919,7 @@ impl RolloutRecorder {
                     subagent_history_start_ordinal,
                     multi_agent_version,
                     context_window: initial_window_id.map(SessionContextWindow::new),
+                    adaptive_context_budget,
                 };
 
                 RolloutWriterState {

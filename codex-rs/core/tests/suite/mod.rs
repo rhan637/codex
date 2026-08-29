@@ -35,6 +35,7 @@ pub static CODEX_ALIASES_TEMP_DIR: Option<TestBinaryDispatchGuard> = {
 
 #[cfg(not(target_os = "windows"))]
 mod abort_tasks;
+mod adaptive_context_budget;
 mod additional_context;
 mod agent_execution;
 mod agent_websocket;

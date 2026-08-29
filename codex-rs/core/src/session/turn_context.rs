@@ -441,7 +441,14 @@ impl TurnContext {
     /// Legacy: returns the frozen initial-turn model context window.
     /// Step-scoped consumers should use their captured `StepContext::settings`.
     pub(crate) fn model_context_window(&self) -> Option<i64> {
-        self.model_info().usable_context_window()
+        if self.config.adaptive_context_budget.is_some() {
+            crate::adaptive_context_budget::usable_runtime_context_window(
+                self.config.as_ref(),
+                self.model_info().as_ref(),
+            )
+        } else {
+            self.model_info().usable_context_window()
+        }
     }
 
     pub(crate) fn apps_enabled(&self) -> bool {

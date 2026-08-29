@@ -162,6 +162,8 @@ pub(crate) async fn run_turn(
 ) -> CodexResult<Option<String>> {
     // Record results from hooks that finished after the previous turn before this turn's user prompt.
     drain_async_hook_results(&sess, &turn_context, /*before_user_prompt*/ true).await;
+    sess.ensure_adaptive_context_budget_sampling_allowed(&turn_context)
+        .await?;
 
     let mut client_session =
         prewarmed_client_session.unwrap_or_else(|| sess.services.model_client.new_session());

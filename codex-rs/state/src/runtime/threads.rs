@@ -2589,6 +2589,7 @@ mod tests {
                 subagent_history_start_ordinal: None,
                 multi_agent_version: None,
                 context_window: None,
+                adaptive_context_budget: None,
             },
             git: None,
         })];
@@ -2660,6 +2661,7 @@ mod tests {
                 subagent_history_start_ordinal: None,
                 multi_agent_version: None,
                 context_window: None,
+                adaptive_context_budget: None,
             },
             git: Some(GitInfo {
                 commit_hash: Some(codex_git_utils::GitSha::new("rollout-sha")),
@@ -3364,6 +3366,7 @@ mod tests {
                     },
                     last_token_usage: codex_protocol::protocol::TokenUsage::default(),
                     model_context_window: None,
+                    target_context_budget_tokens: None,
                 }),
                 rate_limits: None,
             },

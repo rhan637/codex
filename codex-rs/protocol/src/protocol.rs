@@ -2210,6 +2210,10 @@ pub struct TokenUsageInfo {
     // TODO(aibrahim): make this not optional
     #[ts(type = "number | null")]
     pub model_context_window: Option<i64>,
+    /// Active soft context budget selected by the adaptive context governor.
+    #[serde(default)]
+    #[ts(type = "number | null")]
+    pub target_context_budget_tokens: Option<i64>,
 }
 
 impl TokenUsageInfo {
@@ -2228,6 +2232,7 @@ impl TokenUsageInfo {
                 total_token_usage: TokenUsage::default(),
                 last_token_usage: TokenUsage::default(),
                 model_context_window,
+                target_context_budget_tokens: None,
             },
         };
         if let Some(last) = last {
@@ -2264,6 +2269,7 @@ impl TokenUsageInfo {
             total_token_usage: TokenUsage::default(),
             last_token_usage: TokenUsage::default(),
             model_context_window: Some(context_window),
+            target_context_budget_tokens: None,
         };
         info.fill_to_context_window(context_window);
         info
@@ -2959,6 +2965,33 @@ pub struct SessionContextWindow {
     pub window_id: String,
 }
 
+pub const ADAPTIVE_CONTEXT_BUDGET_POLICY_VERSION: u32 = 1;
+
+/// Immutable adaptive-context policy snapshot persisted with a thread.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema, TS)]
+pub struct AdaptiveContextBudgetPolicy {
+    pub policy_version: u32,
+    pub context_window_tiers: Vec<i64>,
+    pub keep_below_percent: u32,
+    pub expand_at_or_above_percent: u32,
+    pub ambiguous_compactions_before_expand: u32,
+}
+
+/// Mutable adaptive-context state persisted at each compaction checkpoint.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema, TS)]
+pub struct AdaptiveContextBudgetState {
+    pub policy_version: u32,
+    pub target_context_budget_tokens: i64,
+    pub ambiguous_compaction_count: u32,
+}
+
+/// Complete adaptive-context policy and state needed to resume a thread.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema, TS)]
+pub struct AdaptiveContextBudgetCheckpoint {
+    pub policy: AdaptiveContextBudgetPolicy,
+    pub state: AdaptiveContextBudgetState,
+}
+
 impl SessionContextWindow {
     pub fn new(window_id: String) -> Self {
         Self { window_id }
@@ -3048,6 +3081,8 @@ pub struct SessionMeta {
     /// Initial context-window identity for consumers that tail rollout JSONL before compaction.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_window: Option<SessionContextWindow>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adaptive_context_budget: Option<AdaptiveContextBudgetCheckpoint>,
 }
 
 impl Default for SessionMeta {
@@ -3078,6 +3113,7 @@ impl Default for SessionMeta {
             subagent_history_start_ordinal: None,
             multi_agent_version: None,
             context_window: None,
+            adaptive_context_budget: None,
         }
     }
 }
@@ -6155,6 +6191,7 @@ mod tests {
             total_token_usage: TokenUsage::default(),
             last_token_usage: TokenUsage::default(),
             model_context_window: Some(258_400),
+            target_context_budget_tokens: None,
         });
         let last = Some(TokenUsage {
             input_tokens: 10,
@@ -6178,6 +6215,7 @@ mod tests {
             total_token_usage: TokenUsage::default(),
             last_token_usage: TokenUsage::default(),
             model_context_window: Some(258_400),
+            target_context_budget_tokens: None,
         });
         let last = Some(TokenUsage {
             input_tokens: 10,

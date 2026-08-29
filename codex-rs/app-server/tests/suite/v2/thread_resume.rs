@@ -179,6 +179,7 @@ async fn thread_resume_paginated_model_context_preserves_original_metadata() -> 
             first_window_id: None,
             previous_window_id: None,
             window_id: None,
+            adaptive_context_budget: None,
         }),
     )
     .await?;
@@ -3275,6 +3276,7 @@ async fn cold_paginated_resume_restores_usage_without_loading_turns() -> Result<
                     ..Default::default()
                 },
                 model_context_window: Some(200_000),
+                target_context_budget_tokens: None,
             }),
             rate_limits: None,
         })),
@@ -3352,6 +3354,7 @@ async fn cold_paginated_resume_omits_usage_when_its_turn_is_ambiguous() -> Resul
                     ..Default::default()
                 },
                 model_context_window: Some(200_000),
+                target_context_budget_tokens: None,
             }),
             rate_limits: None,
         })),
@@ -3633,6 +3636,7 @@ async fn thread_resume_token_usage_replay_can_belong_to_interrupted_turn() -> Re
                         codex_rollout_budget_units: None,
                     },
                     model_context_window: Some(200_000),
+                target_context_budget_tokens: None,
                 }),
                 rate_limits: None,
             }))?,
@@ -3787,6 +3791,7 @@ async fn thread_resume_prefers_persisted_git_metadata_for_local_threads() -> Res
         subagent_history_start_ordinal: None,
         multi_agent_version: None,
         context_window: None,
+        adaptive_context_budget: None,
     };
     std::fs::write(
         &rollout_path,

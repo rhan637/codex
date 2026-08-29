@@ -48,6 +48,7 @@ pub use codex_thread::GuardianRootMessage;
 pub use codex_thread::GuardianRootSnapshot;
 pub use codex_thread::ThreadConfigSnapshot;
 pub use session::turn_context::TurnContext;
+mod adaptive_context_budget;
 mod agent;
 mod agent_communication;
 mod attestation;

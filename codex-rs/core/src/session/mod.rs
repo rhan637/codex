@@ -195,6 +195,7 @@ use crate::codex_thread::ThreadConfigSnapshot;
 #[cfg(test)]
 use crate::compact::collect_user_messages;
 use crate::config::Config;
+use crate::config::ConstraintError;
 use crate::config::ConstraintResult;
 use crate::config::PermissionProfileSnapshot;
 use crate::config::PermissionProfileState;
@@ -1274,6 +1275,13 @@ impl Session {
         state.auto_compact_window_snapshot()
     }
 
+    pub(crate) async fn adaptive_context_budget_target(&self) -> Option<i64> {
+        let state = self.state.lock().await;
+        state
+            .adaptive_context_budget()
+            .map(crate::adaptive_context_budget::AdaptiveContextBudgetRuntime::target_context_budget_tokens)
+    }
+
     pub(crate) async fn estimated_tokens_after_last_model_generated_item(&self) -> i64 {
         let state = self.state.lock().await;
         state
@@ -1503,6 +1511,8 @@ impl Session {
             first_window_id,
             previous_window_id,
             window_id,
+            adaptive_context_budget,
+            adaptive_context_budget_error,
         } = self
             .reconstruct_history_from_rollout(turn_context, rollout_items)
             .await;
@@ -1548,6 +1558,34 @@ impl Session {
                 },
             );
             state.set_previous_turn_settings(previous_turn_settings.clone());
+            if turn_context.config.adaptive_context_budget.is_some()
+                && let Some(checkpoint) = adaptive_context_budget.clone()
+            {
+                state.set_adaptive_context_budget(Some(
+                    crate::adaptive_context_budget::AdaptiveContextBudgetRuntime::restored(
+                        checkpoint,
+                        adaptive_context_budget_error,
+                    ),
+                ));
+            }
+        }
+        if turn_context.config.adaptive_context_budget.is_some()
+            && adaptive_context_budget.is_none()
+        {
+            let history = self.clone_history().await;
+            let base_instructions = self.get_base_instructions().await;
+            if let Some(active_context_tokens) =
+                history.estimate_token_count_with_base_instructions(&base_instructions)
+            {
+                let mut state = self.state.lock().await;
+                if let Some(runtime) = state.adaptive_context_budget_mut() {
+                    runtime.restore_legacy_compatible_tier(
+                        active_context_tokens,
+                        turn_context.config.as_ref(),
+                        turn_context.model_info().as_ref(),
+                    );
+                }
+            }
         }
         let prefix_tokens = if matches!(
             turn_context.config.model_auto_compact_token_limit_scope,
@@ -1625,6 +1663,29 @@ impl Session {
         updates: SessionSettingsUpdate,
         should_commit: impl FnOnce(&SessionConfiguration, &SessionConfiguration) -> bool + Send,
     ) -> ConstraintResult<Option<SessionSettingsCommit>> {
+        let requested_model = updates
+            .step_settings
+            .collaboration_mode
+            .as_ref()
+            .map(|mode| mode.model().to_string())
+            .or_else(|| updates.step_settings.model.clone());
+        let candidate_model_info = if let Some(requested_model) = requested_model {
+            let model_config = {
+                let state = self.state.lock().await;
+                state
+                    .session_configuration
+                    .original_config_do_not_use
+                    .to_models_manager_config()
+            };
+            Some(
+                self.services
+                    .models_manager
+                    .get_model_info(&requested_model, &model_config)
+                    .await,
+            )
+        } else {
+            None
+        };
         let notify_config_contributors = !self.services.extensions.config_contributors().is_empty();
         let (commit, previous_config, new_config, permission_profile_changed, mcp_inputs_changed) = {
             let mut state = self.state.lock().await;
@@ -1636,6 +1697,18 @@ impl Session {
                     return Err(err);
                 }
             };
+
+            if let (Some(runtime), Some(candidate_model_info)) = (
+                state.adaptive_context_budget(),
+                candidate_model_info.as_ref(),
+            ) {
+                runtime
+                    .ensure_model_compatible(
+                        updated.original_config_do_not_use.as_ref(),
+                        candidate_model_info,
+                    )
+                    .map_err(|message| ConstraintError::AdaptiveContextBudget { message })?;
+            }
 
             if !should_commit(&state.session_configuration, &updated) {
                 return Ok(None);
@@ -1710,6 +1783,22 @@ impl Session {
         state
             .session_configuration
             .thread_config_snapshot(self.services.turn_environments.selections())
+    }
+
+    pub(crate) async fn ensure_adaptive_context_budget_sampling_allowed(
+        &self,
+        turn_context: &TurnContext,
+    ) -> CodexResult<()> {
+        let state = self.state.lock().await;
+        let Some(runtime) = state.adaptive_context_budget() else {
+            return Ok(());
+        };
+        runtime
+            .ensure_model_compatible(
+                turn_context.config.as_ref(),
+                turn_context.model_info().as_ref(),
+            )
+            .map_err(|message| CodexErrorDetails::InvalidRequest(message).into())
     }
 
     pub(crate) async fn thread_settings_snapshot(&self) -> ThreadSettingsSnapshot {
@@ -3545,10 +3634,43 @@ impl Session {
         reference_context_item: Option<TurnContextItem>,
         world_state_baseline: Option<Arc<WorldState>>,
         metadata: CompactedHistoryMetadata,
+        turn_context: &TurnContext,
     ) {
         for envelope in &mut items {
             Self::assign_missing_response_item_id(&mut envelope.item);
         }
+        // Compaction starts a new history window, so its WorldState baseline must be full.
+        let mut world_state_item = None;
+        {
+            let mut state = self.state.lock().await;
+            state.replace_annotated_history(items.clone(), reference_context_item.clone());
+            if let Some(world_state) = world_state_baseline {
+                let snapshot = world_state.snapshot();
+                world_state_item = Some(WorldStateItem::full(snapshot.clone().into_object()));
+                state.history.set_world_state_baseline(snapshot);
+            }
+        }
+
+        let active_context_tokens_after =
+            self.recompute_token_usage_without_event(turn_context).await;
+        let adaptive_context_budget = {
+            let mut state = self.state.lock().await;
+            if crate::adaptive_context_budget::should_apply_compaction_feedback(metadata.compaction)
+                && let (Some(active_context_tokens_after), Some(runtime)) = (
+                    active_context_tokens_after,
+                    state.adaptive_context_budget_mut(),
+                )
+            {
+                runtime.apply_compaction_feedback(
+                    active_context_tokens_after,
+                    turn_context.config.as_ref(),
+                    turn_context.model_info().as_ref(),
+                );
+            }
+            state
+                .adaptive_context_budget()
+                .map(crate::adaptive_context_budget::AdaptiveContextBudgetRuntime::checkpoint)
+        };
         let compacted_item = CompactedItem {
             message: metadata.message,
             replacement_history: Some(items.clone()),
@@ -3560,18 +3682,8 @@ impl Session {
                 .previous_window_id
                 .map(|id| id.to_string()),
             window_id: Some(metadata.window_ids.window_id.to_string()),
+            adaptive_context_budget,
         };
-        // Compaction starts a new history window, so its WorldState baseline must be full.
-        let mut world_state_item = None;
-        {
-            let mut state = self.state.lock().await;
-            state.replace_annotated_history(items, reference_context_item.clone());
-            if let Some(world_state) = world_state_baseline {
-                let snapshot = world_state.snapshot();
-                world_state_item = Some(WorldStateItem::full(snapshot.clone().into_object()));
-                state.history.set_world_state_baseline(snapshot);
-            }
-        }
 
         self.persist_rollout_items(&[RolloutItem::Compacted(compacted_item)])
             .await;
@@ -3588,6 +3700,7 @@ impl Session {
             let mut state = self.state.lock().await;
             state.queue_pending_session_start_source(codex_hooks::SessionStartSource::Compact);
         }
+        self.send_token_count_event(turn_context).await;
     }
 
     pub fn enabled(&self, feature: Feature) -> bool {
@@ -4002,10 +4115,11 @@ impl Session {
                 message: String::new(),
                 window_number,
                 window_ids,
+                compaction: None,
             },
+            turn_context,
         )
         .await;
-        self.recompute_token_usage(turn_context).await;
         window_number
     }
 
@@ -4153,19 +4267,22 @@ impl Session {
     }
 
     pub(crate) async fn recompute_token_usage(&self, turn_context: &TurnContext) {
+        self.recompute_token_usage_without_event(turn_context).await;
+        self.send_token_count_event(turn_context).await;
+    }
+
+    async fn recompute_token_usage_without_event(&self, turn_context: &TurnContext) -> Option<i64> {
         let history = self.clone_history().await;
         let base_instructions = self.get_base_instructions().await;
-        let Some(estimated_total_tokens) =
-            history.estimate_token_count_with_base_instructions(&base_instructions)
-        else {
-            return;
-        };
+        let estimated_total_tokens =
+            history.estimate_token_count_with_base_instructions(&base_instructions)?;
         {
             let mut state = self.state.lock().await;
             let mut info = state.token_info().unwrap_or(TokenUsageInfo {
                 total_token_usage: TokenUsage::default(),
                 last_token_usage: TokenUsage::default(),
                 model_context_window: None,
+                target_context_budget_tokens: None,
             });
 
             info.last_token_usage = TokenUsage {
@@ -4189,7 +4306,7 @@ impl Session {
             estimated_total_tokens,
         )
         .await;
-        self.send_token_count_event(turn_context).await;
+        Some(estimated_total_tokens)
     }
 
     pub(crate) async fn update_rate_limits(

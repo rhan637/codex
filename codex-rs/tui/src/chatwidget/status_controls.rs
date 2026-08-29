@@ -368,7 +368,10 @@ impl ChatWidget {
     pub(super) fn status_line_context_window_size(&self) -> Option<i64> {
         self.token_info
             .as_ref()
-            .and_then(|info| info.model_context_window)
+            .and_then(|info| {
+                info.target_context_budget_tokens
+                    .or(info.model_context_window)
+            })
             .or(self.config.model_context_window)
     }
 

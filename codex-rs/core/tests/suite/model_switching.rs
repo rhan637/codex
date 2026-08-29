@@ -100,7 +100,7 @@ async fn submit_model_turn(
     Ok(())
 }
 
-fn test_model_info(
+pub(super) fn test_model_info(
     slug: &str,
     display_name: &str,
     description: &str,

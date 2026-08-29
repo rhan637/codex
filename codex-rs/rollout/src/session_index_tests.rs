@@ -59,6 +59,7 @@ fn write_rollout_with_source_and_provider(
                 subagent_history_start_ordinal: None,
                 multi_agent_version: None,
                 context_window: None,
+                adaptive_context_budget: None,
             },
             git: None,
         }),

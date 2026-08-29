@@ -718,6 +718,7 @@ fn write_rollout(path: &std::path::Path, thread_id: ThreadId, message: &str) -> 
             subagent_history_start_ordinal: None,
             multi_agent_version: None,
             context_window: None,
+            adaptive_context_budget: None,
         },
         git: None,
     };

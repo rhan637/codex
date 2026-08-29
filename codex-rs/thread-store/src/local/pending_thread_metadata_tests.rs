@@ -277,6 +277,7 @@ fn create_thread_params(thread_id: ThreadId) -> CreateThreadParams {
         history_base: None,
         subagent_history_start_ordinal: None,
         initial_window_id: uuid::Uuid::now_v7().to_string(),
+        adaptive_context_budget: None,
         metadata: ThreadPersistenceMetadata {
             cwd: Some(std::env::current_dir().expect("cwd")),
             model_provider: "test-provider".to_string(),
